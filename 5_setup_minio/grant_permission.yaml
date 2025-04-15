@@ -1,0 +1,82 @@
+- name: Configure Minio Client on other nodes
+  hosts: all
+  become: true
+  become_user: root
+  tasks:
+    - name: Download Minio Client (mc)
+      ansible.builtin.get_url:
+        url: "https://dl.min.io/client/mc/release/linux-amd64/mc"
+        dest: "/usr/local/bin/mc"
+        mode: "0755"
+
+    - name: Create .mc directory for almalinux
+      ansible.builtin.file:
+        path: "/home/almalinux/.mc"
+        state: directory
+        owner: almalinux
+        group: almalinux
+
+    - name: Create certs directory for mc
+      ansible.builtin.file:
+        path: "/home/almalinux/.mc/certs"
+        state: directory
+        owner: almalinux
+        group: almalinux
+
+    - name: Create CAs directory for mc
+      ansible.builtin.file:
+        path: "/home/almalinux/.mc/certs/CAs"
+        state: directory
+        owner: almalinux
+        group: almalinux
+
+    - name: Fetch Minio certificate from storagenode
+      ansible.builtin.fetch:
+        src: "/root/minio.crt"
+        dest: "/tmp/"
+        flat: yes
+      delegate_to: "{{ groups['storagenode'][0] }}"
+      run_once: true
+
+    - name: Copy minio.crt into .mc/certs
+      ansible.builtin.copy:
+        src: "/tmp/minio.crt"
+        dest: "/home/almalinux/.mc/certs/{{inventory_hostname}}.crt"
+        owner: almalinux
+        group: almalinux
+        mode: "0600"
+
+    - name: Copy minio.crt into .mc/certs/CAs
+      ansible.builtin.copy:
+        src: "/tmp/minio.crt"
+        dest: "/home/almalinux/.mc/certs/CAs/local.crt"
+        owner: almalinux
+        group: almalinux
+        mode: "0600"
+
+    - name: Copy minio root password to each node
+      ansible.builtin.copy:
+        src: "./.miniopass"
+        dest: "/home/almalinux/.miniopass"
+        owner: almalinux
+        group: almalinux
+        mode: "0600"
+
+    - name: Set up mc config (root credentials)
+      ansible.builtin.template:
+        src: "files/mc_config.json.j2"
+        dest: "/home/almalinux/.mc/config.json"
+        owner: almalinux
+        group: almalinux
+        mode: "0600"
+
+#    - name: Create local mc alias using root credentials
+#      ansible.builtin.shell: >
+#            /usr/local/bin/mc alias set local
+#        https://{{ groups['storagenode'][0] }}:9000
+#        myminioadmin
+#        "$(cat /root/.miniopass)"
+#        --api s3v4
+#      args:
+#        chdir: /root
+

@@ -1,0 +1,65 @@
+---
+- name: Install and unpack AlphaFold datasets
+  hosts: storagenode
+  vars_files:
+    - alphafold_urls.yml
+
+  tasks:
+    - name: Build dataset info list
+      ansible.builtin.set_fact:
+        dataset_info: "{{ dataset_info | default([]) + [ {
+          'url':    item,
+          'archive': item | basename,
+          'species': (item | basename).split('_')[-2] | lower
+        } ] }}"
+      loop: "{{ alphafold_urls }}"
+
+    - name: Download archives
+      ansible.builtin.get_url:
+        url: "{{ item.url }}"
+        dest: "/home/almalinux/data/{{ item.archive }}"
+        tmp_dest: /home/almalinux/data
+      loop: "{{ dataset_info }}"
+      loop_control:
+        label: "{{ item.archive }}"
+
+    - name: Create unpack folders
+      ansible.builtin.file:
+        path: "/home/almalinux/data/{{ item.species }}/"
+        state: directory
+      loop: "{{ dataset_info }}"
+      loop_control:
+        label: "{{ item.species }}"
+
+    - name: Unpack archives
+      ansible.builtin.unarchive:
+        src: "/home/almalinux/data/{{ item.archive }}"
+        dest: "/home/almalinux/data/{{ item.species }}/"
+        remote_src: true
+      loop: "{{ dataset_info }}"
+      loop_control:
+        label: "{{ item.archive }}"
+
+#    - name: Remove source archives
+#      ansible.builtin.file:
+#        path: "/home/almalinux/data/{{ item.archive }}"
+#        state: absent
+#      loop: "{{ dataset_info }}"
+#      loop_control:
+#        label: "{{ item.archive }}"
+
+    - name: Decompress all .pdb.gz files
+      ansible.builtin.shell: |
+        find /home/almalinux/data/{{ item.species }}/ -maxdepth 1 -name '*.pdb.gz' -print0 \
+        | xargs -0 -P 3 gzip -d
+      loop: "{{ dataset_info }}"
+      loop_control:
+        label: "{{ item.species }}"
+
+    - name: Remove leftover .gz files
+      ansible.builtin.shell: >
+        find /home/almalinux/data/{{ item.species }}/ -maxdepth 1 -name '*.gz' -print0 | xargs -0 rm -f
+      loop: "{{ dataset_info }}"
+      loop_control:
+        label: "{{ item.species }}"
+

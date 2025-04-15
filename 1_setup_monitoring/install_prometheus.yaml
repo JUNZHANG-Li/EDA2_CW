@@ -1,0 +1,27 @@
+---
+- name: Install required packages on hostnode
+  hosts: hostnode
+  become: yes
+  tasks:
+    - name: Install Golang
+      ansible.builtin.dnf:
+        name: golang
+        state: present
+
+    - name: Install EPEL release repository
+      ansible.builtin.dnf:
+        name: https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm
+        state: present
+        disable_gpg_check: yes
+
+    - name: Import RPM GPG key for EPEL
+      ansible.builtin.command: rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9
+
+    - name: Install Prometheus Golang packages and Node Exporter
+      ansible.builtin.dnf:
+        name:
+          - golang-github-prometheus
+          - golang-github-prometheus-node-exporter
+        state: present
+        disable_gpg_check: yes
+

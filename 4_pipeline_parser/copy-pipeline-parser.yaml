@@ -1,0 +1,25 @@
+---
+- name: Deploy coursework files
+  hosts: workers
+  become: yes
+  tasks:
+    - name: Create pipeline directory
+      file:
+        path: /home/almalinux/pipeline
+        state: directory
+        mode: '0755'
+        owner: almalinux
+        group: almalinux
+
+    - name: Copy scripts to target directory
+      copy:
+        src: "{{ item }}"
+        dest: "/home/almalinux/pipeline/{{ item }}"
+        owner: almalinux
+        group: almalinux
+        mode: '0644'
+      loop:
+        - pipeline_script_v1.py
+        - progress.py
+        - results_parser_v1.py
+

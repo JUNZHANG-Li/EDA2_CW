@@ -1,0 +1,7 @@
+---
+
+- import_playbook: 5_setup_minio/minio_server.yaml
+- import_playbook: 5_setup_minio/grant_permission.yaml
+- import_playbook: 5_setup_minio/config_minio.yaml
+- import_playbook: 5_setup_minio/grant_permission_2.yaml
+- import_playbook: 5_setup_minio/print_password.yaml

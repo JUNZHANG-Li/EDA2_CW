@@ -1,0 +1,6 @@
+---
+
+- import_playbook: 6_setup_hadoop/install-hadoop.yaml
+- import_playbook: 6_setup_hadoop/hadoop-host.yaml
+- import_playbook: 6_setup_hadoop/hadoop-worker.yaml
+- import_playbook: 6_setup_hadoop/hadoop-final.yaml

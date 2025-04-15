@@ -1,0 +1,7 @@
+---
+
+- import_playbook: 3_install_datasets/install_datasets.yaml
+- import_playbook: 3_install_datasets/record_pdb.yaml
+- import_playbook: 3_install_datasets/copy_datasets_to_minio.yaml
+- import_playbook: 3_install_datasets/deploy_paths.yaml
+- import_playbook: 3_install_datasets/install_cath.yaml

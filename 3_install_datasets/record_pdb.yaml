@@ -1,0 +1,25 @@
+---
+- name: Install and unpack AlphaFold datasets
+  hosts: storagenode
+  vars_files:
+    - alphafold_urls.yml
+
+  tasks:
+    - name: Build dataset info list
+      ansible.builtin.set_fact:
+        dataset_info: "{{ dataset_info | default([]) + [ {
+          'url':    item,
+          'archive': item | basename,
+          'species': (item | basename).split('_')[-2] | lower
+        } ] }}"
+      loop: "{{ alphafold_urls }}"
+
+    - name: Record file paths
+      ansible.builtin.shell: |
+        find /home/almalinux/data/{{ item.species }}/ -type f \
+        | sed "s|/home/almalinux/data/||;s|/./|/|" \
+        | xargs -P 3 -I{} echo {} >> /home/almalinux/data/paths.txt
+      loop: "{{ dataset_info }}"
+      loop_control:
+        label: "{{ item.species }}"
+

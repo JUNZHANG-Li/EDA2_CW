@@ -1,0 +1,17 @@
+---
+- name: Create and test a Minio bucket on hostnode
+  hosts: all
+  become: true
+  become_user: almalinux
+
+  vars:
+    minio_host: "{{ groups['storagenode'][0] }}"
+
+  tasks:
+    - name: Set local Minio alias
+      ansible.builtin.shell: >
+        /usr/local/bin/mc alias set local
+        https://{{ minio_host }}:9000
+        myminioadmin
+        "$(cat /home/almalinux/.miniopass)"
+

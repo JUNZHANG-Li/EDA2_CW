@@ -1,0 +1,53 @@
+---
+- name: Install and unpack AlphaFold Human dataset
+  hosts: workers
+  tasks:
+    - name: Create data Directory
+      ansible.builtin.file:
+        path: /home/almalinux/data
+        state: directory
+
+    - name: Download AlphaFold Human dataset
+      ansible.builtin.get_url:
+        dest: /home/almalinux/data/UP000005640_9606_HUMAN_v4.tar
+        url: "https://ftp.ebi.ac.uk/pub/databases/alphafold/latest/UP000005640_9606_HUMAN_v4.tar"
+        tmp_dest: /home/almalinux/data
+
+    - name: Create unpack directory
+      ansible.builtin.file:
+        path: /home/almalinux/data/UP000005640_9606_HUMAN_v4/
+        state: directory
+
+    - name: Unpack AlphaFold Human dataset
+      ansible.builtin.unarchive:
+        dest: /home/almalinux/data/UP000005640_9606_HUMAN_v4/
+        remote_src: true
+        src: /home/almalinux/data/UP000005640_9606_HUMAN_v4.tar
+
+    - name: Remove source archive
+      ansible.builtin.file:
+        path: /home/almalinux/data/UP000005640_9606_HUMAN_v4.tar
+        state: absent
+
+    - name: Find Human .pdb.gz files
+      ansible.builtin.find:
+        paths: /home/almalinux/data/UP000005640_9606_HUMAN_v4/
+        patterns: '*.pdb.gz'
+      register: pdb_gz_files
+
+    - name: Store Human .pdb.gz file list
+      ansible.builtin.copy:
+        content: |
+          {% for file in pdb_gz_files.files %}
+          {{ file.path }}
+          {% endfor %}
+        dest: /home/almalinux/data/human_task_list.txt
+
+    - name: Unzip Human .pdb.gz files
+      ansible.builtin.shell:
+        cmd: xargs -n 1 -P 3 gzip -d < /home/almalinux/data/human_task_list.txt
+
+    - name: Delete Human .gz files
+      ansible.builtin.shell: |
+        find /home/almalinux/data/UP000005640_9606_HUMAN_v4/ -maxdepth 1 -name '*.gz' -print0 | xargs -0 rm -f
+

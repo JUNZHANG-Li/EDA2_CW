@@ -1,0 +1,13 @@
+---
+
+- import_playbook: 2_config_nodes/customisations.yaml
+- import_playbook: 2_config_nodes/install-dependency.yaml
+- import_playbook: 2_config_nodes/hostnamestoragenode.yaml
+- import_playbook: 2_config_nodes/hostnamehostnode.yaml
+- import_playbook: 2_config_nodes/hostnameworkers.yaml
+- import_playbook: 2_config_nodes/commonkeys.yaml
+- import_playbook: 2_config_nodes/sharecommonkeys.yaml
+- import_playbook: 2_config_nodes/userfiles.yaml
+- import_playbook: 2_config_nodes/firewall_new.yaml
+- import_playbook: 2_config_nodes/spark-install.yaml
+- import_playbook: 2_config_nodes/second-disk.yaml

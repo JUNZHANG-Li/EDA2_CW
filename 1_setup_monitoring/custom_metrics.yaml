@@ -1,0 +1,20 @@
+---
+- name: Configure Node Exporter with custom metrics
+  hosts: workers
+  become: true
+  become_user: root
+  tasks:
+    - name: Create node_exporter user
+      user:
+        name: node_exporter
+        state: present
+        shell: /sbin/nologin
+        system: true
+
+    - name: Create Ensure textfile collector directory
+      file:
+        path: /var/lib/node_exporter/textfile_collector
+        state: directory
+        owner: node_exporter
+        group: node_exporter
+        mode: '0755'

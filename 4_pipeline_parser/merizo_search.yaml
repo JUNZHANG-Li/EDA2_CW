@@ -1,0 +1,32 @@
+---
+- name: Clone a Git repository
+  hosts: workers:storagenode
+  become: yes
+  tasks:
+    - name: Clone merizo_search
+      git:
+        repo: "https://github.com/psipred/merizo_search.git"
+        dest: "/home/almalinux/merizo_search"
+        force: yes
+
+    - name: Update line 135 in predict.py
+      lineinfile:
+        path: /home/almalinux/merizo_search/merizo_search/programs/Merizo/predict.py
+        regexp: '^\s*subset_weights\s*=\s*torch\.load\(.*\)$'
+        line: '        subset_weights = torch.load(file_path, weights_only=False)'
+        backrefs: true
+
+    - name: Update line 43 in dbsearch.py
+      lineinfile:
+        path: /home/almalinux/merizo_search/merizo_search/programs/Foldclass/dbsearch.py
+        regexp: '^\s*network\.load_state_dict\(torch\.load\(.*map_location=lambda storage, loc: storage\)\s*,\s*strict=False\)$'
+        line: "    network.load_state_dict(torch.load(scriptdir + '/FINAL_foldclass_model.pt', weights_only=False, map_location=lambda storage, loc: storage), strict=False)"
+        backrefs: true
+
+    - name: Update line 51 in dbsearch.py
+      lineinfile:
+        path: /home/almalinux/merizo_search/merizo_search/programs/Foldclass/dbsearch.py
+        regexp: '^\s*target_db\s*=\s*torch\.load\(.*\)$'
+        line: "        target_db = torch.load(db_name + '.pt', weights_only=False).to(device)"
+        backrefs: true
+

@@ -1,0 +1,42 @@
+---
+- name: Copy AlphaFold datasets
+  hosts: storagenode
+  vars_files:
+    - alphafold_urls.yml
+
+  tasks:
+    - name: Build dataset info list
+      ansible.builtin.set_fact:
+        dataset_info: "{{ dataset_info | default([]) + [ {
+          'url':    item,
+          'archive': item | basename,
+          'species': (item | basename).split('_')[-2] | lower
+        } ] }}"
+      loop: "{{ alphafold_urls }}"
+
+    - name: Check input bucket existance
+      ansible.builtin.shell: "/usr/local/bin/mc ls local/input"
+      register: input_bucket_check
+      ignore_errors: true
+
+    - name: Generate input bucket
+      ansible.builtin.shell: "/usr/local/bin/mc mb local/input"
+      when: input_bucket_check.failed or "No such bucket" in input_bucket_check.stderr
+    
+    - name: Check output existance
+      ansible.builtin.shell: "/usr/local/bin/mc ls local/output"
+      register: output_bucket_check
+      ignore_errors: true
+
+    - name: Generate output bucket
+      ansible.builtin.shell: "/usr/local/bin/mc mb local/output"
+      when: output_bucket_check.failed or "No such bucket" in output_bucket_check.stderr
+
+    - name: Upload datasets
+      ansible.builtin.shell: "/usr/local/bin/mc cp -r /home/almalinux/data/{{ item.species }}/ local/input/{{ item.species }}"
+      loop: "{{ dataset_info }}"
+      loop_control:
+        label: "{{ item.archive }}"
+    
+    - name: Upload paths.txt
+      ansible.builtin.shell: "/usr/local/bin/mc cp /home/almalinux/data/paths.txt local/input"

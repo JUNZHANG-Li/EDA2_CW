@@ -1,0 +1,22 @@
+---
+- name: Deploy Prometheus configuration
+  hosts: hostnode
+
+  vars:
+    prometheus_config_path: /etc/prometheus/prometheus.yml
+
+  tasks:
+    - name: Gather workers IPs
+      ansible.builtin.set_fact:
+        workers_ip: "{{ groups['workers'] | map('extract', hostvars, 'ip') | map('first') | list }}"
+
+    - name: Render Prometheus configuration file
+      become: true
+      become_user: root
+      ansible.builtin.template:
+        src: prometheus.yml.j2
+        dest: "{{ prometheus_config_path }}"
+        owner: prometheus
+        group: prometheus
+        mode: '0644'
+

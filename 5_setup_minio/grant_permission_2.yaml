@@ -1,0 +1,12 @@
+- name: Grant permission to storage node
+  hosts: storagenode
+  become: true
+  become_user: root
+  tasks:
+    - name: Copy minio root password to home
+      ansible.builtin.copy:
+        src: "./.miniopass"
+        dest: "/home/almalinux/.miniopass"
+        owner: almalinux
+        group: almalinux
+        mode: "0600"

@@ -1,0 +1,5 @@
+---
+
+- import_playbook: 4_pipeline_parser/merizo_search.yaml
+- import_playbook: 4_pipeline_parser/copy-pipeline-parser.yaml
+- import_playbook: 4_pipeline_parser/get_total_pdb_files.yaml

@@ -1,0 +1,5 @@
+---
+
+- import_playbook: 0_update_almalinux/update.yaml
+- import_playbook: 0_update_almalinux/reboot.yaml
+

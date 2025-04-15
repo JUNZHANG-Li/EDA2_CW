@@ -1,0 +1,10 @@
+# Minio Root Credentials
+MINIO_ROOT_USER=myminioadmin
+MINIO_ROOT_PASSWORD="{{ lookup('ansible.builtin.password', './.miniopass', length=16) }}"
+
+# Minio Volumes
+MINIO_VOLUMES="/data/almalinux/minio"
+
+# Minio Console
+MINIO_OPTS="--console-address :9001"
+

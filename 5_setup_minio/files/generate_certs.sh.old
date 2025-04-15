@@ -1,0 +1,15 @@
+#!/bin/bash
+
+# Usage: ./generate_certs.sh S3_HOSTNAME CONS_HOSTNAME
+# Example: ./generate_certs.sh myuser-s3 myuser-cons
+
+S3_HOST="$1"
+CONS_HOST="$2"
+
+openssl req -x509 -newkey rsa:4096 \
+  -keyout /root/minio.key \
+  -out /root/minio.crt \
+  -sha256 -days 3650 -nodes \
+  -subj "/CN=${S3_HOST}" \
+  -addext "subjectAltName = DNS:${S3_HOST},DNS:${CONS_HOST}"
+

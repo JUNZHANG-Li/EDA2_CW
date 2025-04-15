@@ -1,0 +1,67 @@
+---
+- name: Install and configure Grafana with preset dashboard and Prometheus data source
+  hosts: hostnode
+  become: true
+
+  tasks:
+    - name: Install Grafana
+      ansible.builtin.dnf:
+        name: grafana
+        state: present
+
+    - name: Create dashboards directory
+      ansible.builtin.file:
+        path: /var/lib/grafana/dashboards
+        state: directory
+        owner: grafana
+        group: grafana
+        mode: '0755'
+
+    - name: Copy provisioning configuration for dashboards
+      ansible.builtin.copy:
+        src: dashboards.yaml
+        dest: /etc/grafana/provisioning/dashboards/dashboards.yaml
+        owner: grafana
+        group: grafana
+        mode: '0644'
+
+    - name: Copy JSON dashboard
+      ansible.builtin.copy:
+        src: pdb_analysis_monitor.json
+        dest: /var/lib/grafana/dashboards/pdb_analysis_monitor.json
+        owner: grafana
+        group: grafana
+        mode: '0644'
+
+    - name: Create datasources directory
+      ansible.builtin.file:
+        path: /etc/grafana/provisioning/datasources
+        state: directory
+        owner: grafana
+        group: grafana
+        mode: '0755'
+
+    - name: Copy Prometheus data source configuration
+      ansible.builtin.copy:
+        src: ./datasources.yaml
+        dest: /etc/grafana/provisioning/datasources/datasources.yaml
+        owner: grafana
+        group: grafana
+        mode: '0644'
+
+    - name: Reload systemd daemon
+      ansible.builtin.command:
+        cmd: systemctl daemon-reload
+
+    - name: Start and enable Grafana service
+      ansible.builtin.systemd:
+        name: grafana-server
+        state: restarted
+        enabled: true
+
+    - name: Check Grafana service status
+      ansible.builtin.command:
+        cmd: systemctl status grafana-server
+      register: grafana_status
+      changed_when: false
+

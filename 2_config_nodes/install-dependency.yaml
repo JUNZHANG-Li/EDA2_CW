@@ -1,0 +1,20 @@
+- name: Install Dependencies
+  hosts: all
+  become: yes
+  tasks:
+    - name: Install Python dependencies
+      ansible.builtin.pip:
+        name:
+          - biopython
+          - torch
+          - numpy
+          - scipy
+          - faiss-cpu
+          - rotary-embedding-torch
+          - natsort
+          - matplotlib
+          - ansible-runner
+        state: latest
+        executable: /usr/bin/pip3
+        extra_args: --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cpu
+

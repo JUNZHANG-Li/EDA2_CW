@@ -1,0 +1,28 @@
+- name: Node exporter installation
+  hosts: hostnode
+  become: true
+  become_user: root
+  tasks:
+  - name: accept repo GPG key
+    ansible.builtin.shell:
+      cmd: rpm --import https://dl.fedoraproject.org/pub/epel/RPM-GPG-KEY-EPEL-9
+  - name: Install EPEL
+    ansible.builtin.dnf:
+      name: https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm
+      state: present
+  - name: move service file
+    ansible.builtin.copy:
+      src: prometheus.service
+      dest: /etc/systemd/system/prometheus.service
+      owner: root
+      group: root
+  - name: Start prometheus
+    ansible.builtin.systemd:
+      name: prometheus
+      state: started
+      daemon_reload: true
+  - name: Enable prometheus service
+    ansible.builtin.systemd:
+      name: prometheus.service
+      enabled: yes
+

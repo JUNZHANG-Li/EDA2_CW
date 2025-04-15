@@ -1,0 +1,12 @@
+---
+- name: Copy pyspark files and run analysis
+  hosts: hostnode
+  tasks:
+    - name: Copy pyspark-files to the target directory
+      ansible.builtin.copy:
+        src: ./pyspark-files
+        dest: /home/almalinux/
+        owner: almalinux
+        group: almalinux
+        mode: '0755'
+

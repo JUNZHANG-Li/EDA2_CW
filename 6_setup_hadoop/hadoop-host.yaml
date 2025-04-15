@@ -1,0 +1,14 @@
+- name: Install and configure hadoop
+  hosts: hostnode
+  tasks: 
+  - name: create namenode
+    become: yes
+    ansible.builtin.file:
+      path: /opt/hadoop_tmp/hdfs/namenode
+      state: directory
+      owner: almalinux
+      group: almalinux
+  - name: generate worker file
+    ansible.builtin.template:
+      src: files/workers.j2
+      dest: hadoop-3.4.0/etc/hadoop/workers

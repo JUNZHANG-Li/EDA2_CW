@@ -1,0 +1,34 @@
+---
+- name: Cleanup and Update Files
+  hosts: workers
+  tasks:
+    - name: Remove clean.log
+      file:
+        path: /home/almalinux/data/clean.log
+        state: absent
+
+    - name: Remove detail.log
+      file:
+        path: /home/almalinux/data/detail.log
+        state: absent
+
+    - name: Remove all files in input directory
+      command: rm -r /home/almalinux/input/*
+      ignore_errors: yes
+
+    - name: Remove all files in output directory
+      command: rm -r /home/almalinux/output/*
+      ignore_errors: yes
+
+    - name: Create or overwrite progression_ratio.prom
+      copy:
+        dest: /home/almalinux/prom_metrics/progression_ratio.prom
+        content: |
+          # HELP progression_ratio Ratio of files processed
+          # TYPE progression_ratio gauge
+          progression_ratio 0.000
+
+          # HELP progression_number Number of files processed
+          # TYPE progression_number gauge
+          progression_number 0
+

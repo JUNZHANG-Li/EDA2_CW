@@ -1,0 +1,46 @@
+- name: Node exporter installation
+  hosts: workers
+  become: true
+  become_user: root
+  tasks:
+  - name: accept repo GPG key
+    ansible.builtin.shell:
+      cmd: rpm --import https://dl.fedoraproject.org/pub/epel/RPM-GPG-KEY-EPEL-9
+  
+  - name: Install EPEL
+    ansible.builtin.dnf:
+      name: https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm
+      state: present
+  
+  - name: install node-exporter
+    ansible.builtin.dnf:
+      name: golang-github-prometheus-node-exporter
+      state: latest
+  
+  - name: Create custom prometheus metrics directory
+    ansible.builtin.file:
+        path: /home/almalinux/prom_metrics
+        state: directory
+        owner: almalinux
+        group: almalinux
+        mode: '0755'
+  
+  - name: move progression_ratio file
+    ansible.builtin.copy:
+        src: progression_ratio.prom
+        dest: /home/almalinux/prom_metrics/progression_ratio.prom
+        owner: almalinux
+        group: almalinux
+
+  - name: move service file
+    ansible.builtin.copy:
+      src: node_exporter.service
+      dest: /etc/systemd/system/node_exporter.service
+      owner: root
+      group: root
+
+  - name: start node-exporter
+    ansible.builtin.service:
+      name: node_exporter
+      state: restarted
+      daemon_reload: true

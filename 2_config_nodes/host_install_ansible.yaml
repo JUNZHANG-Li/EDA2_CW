@@ -1,0 +1,23 @@
+---
+- name: Update and configure hostnode
+  hosts: hostnode
+  become: true
+  tasks:
+    - name: Install epel-release
+      ansible.builtin.dnf:
+        name: epel-release
+        state: present
+
+    - name: Enable CRB (CodeReady Builder repository)
+      ansible.builtin.command:
+        cmd: /usr/bin/crb enable
+      register: crb_result
+      failed_when: crb_result.rc != 0
+
+    - name: Install ansible
+      ansible.builtin.dnf:
+        name:
+          - ansible
+        state: present
+        update_cache: yes
+

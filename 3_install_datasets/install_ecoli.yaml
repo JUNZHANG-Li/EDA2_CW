@@ -1,0 +1,48 @@
+---
+- name: Install and unpack AlphaFold E.coli dataset
+  hosts: storagenode
+  tasks:
+    - name: Download AlphaFold E.coli dataset
+      ansible.builtin.get_url:
+        dest: /data/almalinux/UP000000625_83333_ECOLI_v4.tar
+        url: "https://ftp.ebi.ac.uk/pub/databases/alphafold/latest/UP000000625_83333_ECOLI_v4.tar"
+        tmp_dest: /data/almalinux
+
+    - name: Create unpack directory
+      ansible.builtin.file:
+        path: /data/almalinux/UP000000625_83333_ECOLI_v4/
+        state: directory
+
+    - name: Unpack AlphaFold E.coli dataset
+      ansible.builtin.unarchive:
+        dest: /data/almalinux/UP000000625_83333_ECOLI_v4/
+        remote_src: true
+        src: /data/almalinux/UP000000625_83333_ECOLI_v4.tar
+
+    - name: Find .pdb.gz files
+      ansible.builtin.find:
+        paths: /data/almalinux/UP000000625_83333_ECOLI_v4/
+        patterns: '*.pdb.gz'
+      register: pdb_gz_files
+
+    - name: Store .pdb.gz file list
+      ansible.builtin.copy:
+        content: |
+          {% for file in pdb_gz_files.files %}
+          {{ file.path }}
+          {% endfor %}
+        dest: /tmp/pdb_gz_file_list.txt
+
+    - name: Unzip .pdb.gz files
+      ansible.builtin.shell:
+        cmd: xargs -n 1 -P 3 gzip -d < /tmp/pdb_gz_file_list.txt
+
+    - name: Delete .cif.gz files
+      ansible.builtin.shell: |
+        find /data/almalinux/UP000000625_83333_ECOLI_v4/ -maxdepth 1 -name '*.cif.gz' -print0 | xargs -0 rm -f
+
+    - name: Remove the source archive after unpacking
+      ansible.builtin.file:
+        path: /data/almalinux/UP000000625_83333_ECOLI_v4.tar
+        state: absent
+

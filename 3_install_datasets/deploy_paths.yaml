@@ -1,0 +1,24 @@
+---
+- name: Deploy paths.txt to workers
+  hosts: workers
+  tasks:
+    - name: Create input directory
+      become: yes
+      file:
+        path: /home/almalinux/input
+        state: directory
+        owner: almalinux
+        group: almalinux
+        mode: '0755'
+    
+    - name: Create output directory
+      become: yes
+      file:
+        path: /home/almalinux/output
+        state: directory
+        owner: almalinux
+        group: almalinux
+        mode: '0755'
+    
+    - name: Get pathes.txt from minio
+      ansible.builtin.shell: "/usr/local/bin/mc get local/input/paths.txt /home/almalinux"

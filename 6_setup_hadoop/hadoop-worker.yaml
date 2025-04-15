@@ -1,0 +1,10 @@
+- name: Install and configure hadoop
+  hosts: workers
+  tasks: 
+  - name: create datanode
+    become: yes
+    ansible.builtin.file:
+      path: /opt/hadoop_tmp/hdfs/datanode
+      state: directory
+      owner: almalinux
+      group: almalinux
