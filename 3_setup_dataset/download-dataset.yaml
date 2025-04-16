@@ -5,12 +5,7 @@
   vars:
     uniref50_url: "https://ftp.uniprot.org/pub/databases/uniprot/uniref/uniref50/uniref50.fasta.gz"
     worker_temp_subset_path: "/tmp/uniref50_subset.fasta"
-    # --- subset lines for >24h assuming 10s/seq ---
-    # (24 hours * 3600 s/hr) / 10 s/seq = 8640 seq/core
-    # 8640 seq/core * 16 cores = 138240 sequences needed minimum
-    # 138240 seq * 2 lines/seq = 276480 lines
     subset_line_count: 300000
-
     run_user: "{{ ansible_user }}"
 
   tasks:
@@ -23,22 +18,36 @@
         state: present
       become: true
 
-    - name: Create subset FASTA file using streaming download on designated worker
+    - name: Start streaming download and subset creation (async)
       ansible.builtin.shell:
         cmd: "curl -L --fail --silent --show-error {{ uniref50_url }} | gunzip -c | head -n {{ subset_line_count }} > {{ worker_temp_subset_path }}"
-        args:
-          creates: "{{ worker_temp_subset_path }}"
-      register: subset_creation
-      changed_when: "'exists and will not be overwritten' not in subset_creation.stderr and subset_creation.rc == 0"
-      async: 9000 # Allow long download/processing time (2.5 hours)
-      poll: 15
+      args:
+         executable: /bin/bash
+      creates: "{{ worker_temp_subset_path }}"
+      async: 9000 # Keep async duration
+      poll: 0 # Set poll to 0 to run truly async and check status later
+      register: async_task_kickoff
 
-    - name: Verify subset file was created on designated worker
+    - name: Wait for subset creation task to complete and get results
+      ansible.builtin.async_status:
+        jid: "{{ async_task_kickoff.ansible_job_id }}"
+      register: subset_creation_results
+      until: subset_creation_results.finished
+      retries: 180 # How many times to check (9000s / 30s = 300 attempts needed max, adjust if needed)
+      delay: 30 # Check every 30 seconds (adjust as needed)
+      # Optional: Add become if the status check needs elevated privileges (usually not)
+      # become: true
+
+    - name: Check if async task failed based on return code
+      ansible.builtin.fail:
+        msg: "Streaming subset creation failed. RC: {{ subset_creation_results.rc }}. Stdout: {{ subset_creation_results.stdout | default('') }}. Stderr: {{ subset_creation_results.stderr | default('') }}"
+      when: subset_creation_results.rc is defined and subset_creation_results.rc != 0
+
+    - name: Verify subset file exists after async task completion
       ansible.builtin.stat:
         path: "{{ worker_temp_subset_path }}"
       register: subset_file_stat
       failed_when: not subset_file_stat.stat.exists or subset_file_stat.stat.size == 0
-      when: subset_creation is succeeded
 
     - name: Report subset file location on worker
       ansible.builtin.debug:
