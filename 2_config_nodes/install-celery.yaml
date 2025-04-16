@@ -3,23 +3,7 @@
   hosts: all  # Target host node and worker nodes
   become: true # Required for installing pip and potentially system-wide packages
   tasks:
-    - name: Update apt cache (if needed)
-      ansible.builtin.apt:
-        update_cache: yes
-      changed_when: false
-
-    - name: Ensure pip for Python 3 is installed
-      ansible.builtin.apt:
-        name: python3-pip
-        state: present
-
-    # Installs Celery AND the necessary 'redis' Python client library
-    # Using the bundle install syntax `celery[redis]` is recommended
     - name: Install Celery with Redis support using pip
       ansible.builtin.pip:
         name: celery[redis]
         state: present
-        version: '5.3.6'
-
-    # Note: The 'redis' python library is automatically installed
-    # as a dependency of 'celery[redis]'. No separate step needed.

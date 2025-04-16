@@ -10,3 +10,5 @@
 - import_playbook: 2_config_nodes/firewall.yaml
 # - import_playbook: 2_config_nodes/spark-install.yaml
 - import_playbook: 2_config_nodes/second-disk.yaml
+- import_playbook: 2_config_nodes/install-redis.yaml
+- import_playbook: 2_config_nodes/install-celery.yaml

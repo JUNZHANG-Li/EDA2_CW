@@ -2,9 +2,9 @@
   hosts: hostnode
   become: true
   tasks:
-    - name: Install Redis Server package
-      ansible.builtin.apt:
-        name: redis-server
+    - name: Install Redis package using dnf
+      ansible.builtin.dnf:
+        name: redis
         state: present
 
     # Optional but Recommended: Configure Redis to listen on all private IPs
