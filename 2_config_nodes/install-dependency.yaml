@@ -9,7 +9,6 @@
           - torch
           - transformers
           - numpy
-          - python3-apt
         state: latest
         executable: /usr/bin/pip3
         extra_args: --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cpu
