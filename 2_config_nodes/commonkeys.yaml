@@ -1,5 +1,6 @@
 - name: Generate shared SSH keys
-  hosts: storagenode
+  # hosts: storagenode
+  hosts: hostnode
   tasks: 
   - name: Delete Existing Private Key
     ansible.builtin.file:
