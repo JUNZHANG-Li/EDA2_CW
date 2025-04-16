@@ -1,7 +1,7 @@
 ---
 
 - import_playbook: 2_config_nodes/customisations.yaml
-# - import_playbook: 2_config_nodes/install-dependency.yaml
+- import_playbook: 2_config_nodes/install-dependency.yaml
 - import_playbook: 2_config_nodes/hostnamehostnode.yaml
 - import_playbook: 2_config_nodes/hostnameworkers.yaml
 - import_playbook: 2_config_nodes/commonkeys.yaml

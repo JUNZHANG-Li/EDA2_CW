@@ -7,13 +7,9 @@
         name:
           - biopython
           - torch
+          - transformers
           - numpy
-          - scipy
-          - faiss-cpu
-          - rotary-embedding-torch
-          - natsort
-          - matplotlib
-          - ansible-runner
+          - python3-apt
         state: latest
         executable: /usr/bin/pip3
         extra_args: --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cpu

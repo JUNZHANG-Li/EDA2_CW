@@ -23,16 +23,3 @@
 
     # Note: The 'redis' python library is automatically installed
     # as a dependency of 'celery[redis]'. No separate step needed.
-
-    # Add other necessary Python libraries for the analysis task
-    - name: Install PyTorch (CPU version) and Transformers
-      ansible.builtin.pip:
-        name:
-          - torch --index-url https://download.pytorch.org/whl/cpu
-          - transformers
-        state: present
-
-    - name: Install BioPython
-      ansible.builtin.pip:
-        name: biopython
-        state: present
