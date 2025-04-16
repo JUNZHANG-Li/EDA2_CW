@@ -2,7 +2,7 @@
   hosts: hostnode
   become: true
   tasks:
-    - name: Install Redis package using dnf
+    - name: Install Redis package
       ansible.builtin.dnf:
         name: redis
         state: present
@@ -20,12 +20,12 @@
 
     - name: Ensure Redis service is running and enabled on boot
       ansible.builtin.service:
-        name: redis-server
+        name: redis
         state: started
         enabled: yes
 
   handlers:
     - name: Restart Redis
       ansible.builtin.service:
-        name: redis-server
+        name: redis
         state: restarted

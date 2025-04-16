@@ -3,7 +3,7 @@
   hosts: all  # Target host node and worker nodes
   become: true # Required for installing pip and potentially system-wide packages
   tasks:
-    - name: Install Celery with Redis support using pip
+    - name: Install Celery with Redis support
       ansible.builtin.pip:
         name: celery[redis]
         state: present
