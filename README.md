@@ -31,7 +31,7 @@ Once the monitoring systems are set up, you can access:
 
 ### 4. **Configure All Nodes**
 
-    ansible-playbook -i generate_inventory.py config-nodes.yaml
+    ansible-playbook -i generate_inventory.py setup-node-config.yaml
 
 ### 5. **Setup Minio**
 
