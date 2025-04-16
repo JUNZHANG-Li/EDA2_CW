@@ -18,7 +18,6 @@
         - git
         - python3-devel
         - python3-pip
-        - python3-apt
         - python3-virtualenv
         - patch
         - bzip2
