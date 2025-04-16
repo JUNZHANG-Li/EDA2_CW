@@ -25,12 +25,12 @@
         group: almalinux
         mode: '0755'
   
-  - name: move progression_ratio file
-    ansible.builtin.copy:
-        src: progression_ratio.prom
-        dest: /home/almalinux/prom_metrics/progression_ratio.prom
-        owner: almalinux
-        group: almalinux
+  # - name: move progression_ratio file
+  #   ansible.builtin.copy:
+  #       src: progression_ratio.prom
+  #       dest: /home/almalinux/prom_metrics/progression_ratio.prom
+  #       owner: almalinux
+  #       group: almalinux
 
   - name: move service file
     ansible.builtin.copy:
