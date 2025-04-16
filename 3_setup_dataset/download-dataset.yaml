@@ -1,0 +1,46 @@
+- name: Prepare UniRef50 Subset on Designated Worker
+  hosts: "{{ groups['workers'][0] }}"
+  become: true
+  gather_facts: yes
+  vars:
+    uniref50_url: "https://ftp.uniprot.org/pub/databases/uniprot/uniref/uniref50/uniref50.fasta.gz"
+    worker_temp_subset_path: "/tmp/uniref50_subset.fasta"
+    # --- subset lines for >24h assuming 10s/seq ---
+    # (24 hours * 3600 s/hr) / 10 s/seq = 8640 seq/core
+    # 8640 seq/core * 16 cores = 138240 sequences needed minimum
+    # 138240 seq * 2 lines/seq = 276480 lines
+    subset_line_count: 300000
+
+    run_user: "{{ ansible_user }}"
+
+  tasks:
+    - name: Ensure necessary tools (curl, gunzip, head) are installed on designated worker
+      ansible.builtin.dnf:
+        name:
+          - curl
+          - gzip
+          - coreutils
+        state: present
+      become: true
+
+    - name: Create subset FASTA file using streaming download on designated worker
+      ansible.builtin.shell:
+        cmd: "curl -L --fail --silent --show-error {{ uniref50_url }} | gunzip -c | head -n {{ subset_line_count }} > {{ worker_temp_subset_path }}"
+        args:
+          creates: "{{ worker_temp_subset_path }}"
+      register: subset_creation
+      changed_when: "'exists and will not be overwritten' not in subset_creation.stderr and subset_creation.rc == 0"
+      async: 9000 # Allow long download/processing time (2.5 hours)
+      poll: 15
+
+    - name: Verify subset file was created on designated worker
+      ansible.builtin.stat:
+        path: "{{ worker_temp_subset_path }}"
+      register: subset_file_stat
+      failed_when: not subset_file_stat.stat.exists or subset_file_stat.stat.size == 0
+      when: subset_creation is succeeded
+
+    - name: Report subset file location on worker
+      ansible.builtin.debug:
+        msg: "Dataset subset created successfully on {{ inventory_hostname }} at {{ worker_temp_subset_path }}"
+      when: subset_file_stat.stat.exists | default(false)

@@ -1,0 +1,125 @@
+- hosts: localhost
+  gather_facts: no
+  tasks:
+    - name: Set designated worker hostname/IP fact
+      ansible.builtin.set_fact:
+        designated_worker: "{{ groups['workers'][0] }}"
+        cacheable: yes
+      run_once: yes # Only need to set this once
+
+- name: Ensure rsync is installed on all nodes for synchronize module
+  hosts: all
+  become: true
+  tasks:
+    - name: Install rsync package using dnf
+      ansible.builtin.dnf:
+        name: rsync
+        state: present
+        update_cache: yes
+
+- name: Install Dependencies on Host Node and Sync Subset from Designated Worker
+  hosts: hostnode
+  become: true
+  vars:
+    subset_filename: "uniref50_subset.fasta"
+    source_worker_temp_path: "/tmp/{{ subset_filename }}"
+    host_data_dir: "/home/almalinux/uniref_subset"
+    host_final_dest_path: "{{ host_data_dir }}/{{ subset_filename }}"
+    host_owner: "almalinux"
+    host_group: "almalinux"
+    sync_source_host: "{{ hostvars['localhost']['designated_worker'] }}"
+
+  tasks:
+    - name: Ensure data directory exists on host node
+      ansible.builtin.file:
+        path: "{{ host_data_dir }}"
+        state: directory
+        owner: "{{ host_owner }}"
+        group: "{{ host_group }}"
+        mode: '0755'
+
+    - name: Sync subset from designated worker to host node
+      ansible.posix.synchronize:
+        mode: push
+        src: "{{ source_worker_temp_path }}"
+        dest: "{{ host_final_dest_path }}"
+        # archive: yes # Common rsync options (preserves perms, etc.)
+        # compress: no # Usually not needed for local network
+      delegate_to: "{{ sync_source_host }}" # Run rsync command ON the designated worker
+      become: no # Rsync often works better without sudo if permissions allow access to src/dest
+      # Optional: If destination needs sudo, configure rsync path/sudo in ansible.cfg or use different method
+
+    - name: Set final ownership on host node subset file
+      ansible.builtin.file:
+        path: "{{ host_final_dest_path }}"
+        owner: "{{ host_owner }}"
+        group: "{{ host_group }}"
+        mode: '0644'
+
+- name: Sync Subset from Designated Worker to Other Workers
+  hosts: workers:!{{ hostvars['localhost']['designated_worker'] }}
+  become: true
+  vars:
+    subset_filename: "uniref50_subset.fasta"
+    source_worker_temp_path: "/tmp/{{ subset_filename }}"
+    worker_data_dir: "/data"
+    worker_final_dest_path: "{{ worker_data_dir }}/{{ subset_filename }}"
+    worker_owner: "almalinux"
+    worker_group: "almalinux"
+    sync_source_host: "{{ hostvars['localhost']['designated_worker'] }}"
+
+  tasks:
+    - name: Ensure data directory exists on worker
+      ansible.builtin.file:
+        path: "{{ worker_data_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Sync subset from designated worker to this worker
+      ansible.posix.synchronize:
+        mode: push
+        src: "{{ source_worker_temp_path }}"
+        dest: "{{ worker_final_dest_path }}"
+        # archive: yes
+        # compress: no
+      delegate_to: "{{ sync_source_host }}" # Run rsync command ON the designated worker
+      become: no # Rsync often works better without sudo
+
+    - name: Set final ownership on worker subset file
+      ansible.builtin.file:
+        path: "{{ worker_final_dest_path }}"
+        owner: "{{ worker_owner }}"
+        group: "{{ worker_group }}"
+        mode: '0644'
+
+- name: Move Subset to Final Location on Designated Worker & Cleanup
+  hosts: "{{ hostvars['localhost']['designated_worker'] }}"
+  become: true
+  vars:
+    subset_filename: "uniref50_subset.fasta"
+    worker_temp_subset_path: "/tmp/{{ subset_filename }}"
+    worker_data_dir: "/data"
+    worker_final_dest_path: "{{ worker_data_dir }}/{{ subset_filename }}"
+    worker_owner: "almalinux"
+    worker_group: "almalinux"
+  tasks:
+    - name: Ensure data directory exists on designated worker
+      ansible.builtin.file:
+        path: "{{ worker_data_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Move subset file from temp to final data location using copy (sets ownership/mode)
+      ansible.builtin.copy:
+        src: "{{ worker_temp_subset_path }}"
+        dest: "{{ worker_final_dest_path }}"
+        remote_src: yes
+        owner: "{{ worker_owner }}"
+        group: "{{ worker_group }}"
+        mode: '0644'
+        force: yes
+
+    - name: Clean up temporary subset file on designated worker
+      ansible.builtin.file:
+        path: "{{ worker_temp_subset_path }}"
+        state: absent
