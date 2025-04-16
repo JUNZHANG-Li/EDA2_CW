@@ -1,0 +1,31 @@
+- name: Install and Configure Redis Server
+  hosts: hostnode
+  become: true
+  tasks:
+    - name: Install Redis Server package
+      ansible.builtin.apt:
+        name: redis-server
+        state: present
+
+    # Optional but Recommended: Configure Redis to listen on all private IPs
+    # Default might be 127.0.0.1 only, preventing workers from connecting.
+    # 0.0.0.0 makes it listen on all available network interfaces.
+    - name: Configure Redis to accept connections from workers
+      ansible.builtin.lineinfile:
+        path: /etc/redis/redis.conf
+        regexp: '^bind 127.0.0.1 ::1'   # Standard default bind line
+        line: 'bind 0.0.0.0'            # Replace with listening on all interfaces
+        backrefs: yes                   # Use regex match for replacement
+      notify: Restart Redis             # Restart Redis if this line changes
+
+    - name: Ensure Redis service is running and enabled on boot
+      ansible.builtin.service:
+        name: redis-server
+        state: started
+        enabled: yes
+
+  handlers:
+    - name: Restart Redis
+      ansible.builtin.service:
+        name: redis-server
+        state: restarted
