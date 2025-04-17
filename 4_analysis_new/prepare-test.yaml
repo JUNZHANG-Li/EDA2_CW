@@ -43,14 +43,6 @@
         - "{{ scripts_dir }}"
         - "{{ output_dir }}"
 
-    - name: Install OS dependencies (wget, python3-pip)
-      ansible.builtin.package:
-        name:
-          - wget
-          - python3-pip
-        state: present
-        update_cache: yes
-
     - name: Install Python dependencies for scripts
       ansible.builtin.pip:
         name:
@@ -94,13 +86,13 @@
     # 4. Run Generator Script to Create URL Pool File
     - name: Execute image URL list generator script # Updated task name
       ansible.builtin.command:
-        cmd: >
+        cmd: > 
           python3 {{ generator_script_remote_path }}
           --meta-dir {{ metadata_dir }}
           --url-col {{ url_column_name }}
-          --output {{ url_list_file_path }} # Use updated variable
+          --output {{ url_list_file_path }}
           --count {{ target_url_pool_count }}
-        creates: "{{ url_list_file_path }}" # Use updated variable
+        creates: "{{ url_list_file_path }}" 
       register: script_execution
       changed_when: script_execution.rc == 0 and "'Successfully wrote' in script_execution.stdout"
       failed_when: script_execution.rc != 0
