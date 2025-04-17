@@ -1,0 +1,38 @@
+---
+- name: Ensure Python Prerequisites are installed
+  hosts: all
+  become: yes
+  tasks:
+    - name: Install Python 3 and pip
+      ansible.builtin.dnf:
+        name:
+          - python3
+          - python3-pip
+        state: present
+        update_cache: yes
+
+    # Install core Dask packages globally
+    - name: Install Dask (Distributed Computing Framework) globally
+      ansible.builtin.pip:
+        name: dask[distributed]
+        state: present
+
+# Install worker-specific packages globally
+- name: Install Worker-Specific Python Packages Globally
+  hosts: workers
+  become: yes # Required for global pip install
+  tasks:
+    - name: Install Requests (Data Handling) globally
+      ansible.builtin.pip:
+        name: requests
+        state: present
+
+# Install host-specific packages globally
+- name: Install Host-Specific Python Packages Globally
+  hosts: hostnode
+  become: yes # Required for global pip install
+  tasks:
+    - name: Install Flask (User Interface) globally
+      ansible.builtin.pip:
+        name: Flask
+        state: present

@@ -5,11 +5,9 @@
     - name: Install Python dependencies
       ansible.builtin.pip:
         name:
-          - biopython
           - torch
           - transformers
           - numpy
-          - pyfaidx
         state: latest
         executable: /usr/bin/pip3
         extra_args: --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cpu
