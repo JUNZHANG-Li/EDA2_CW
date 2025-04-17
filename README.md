@@ -23,11 +23,11 @@
     ansible-playbook -i generate_inventory.py setup-monitoring.yaml
 
 Once the monitoring systems are set up, you can access:
-- **Grafana** at [https://grafana-ucabiqx-x.comp0235.condenser.arc.ucl.ac.uk/](https://grafana-ucabiqx-x.comp0235.condenser.arc.ucl.ac.uk/)
+- **Grafana** at [https://grafana-ucabiqx.comp0235.condenser.arc.ucl.ac.uk/](https://grafana-ucabiqx.comp0235.condenser.arc.ucl.ac.uk/)
   - **Default username:** `admin`
   - **Default password:** `william200212`
 
-- **Prometheus** at [https://prometheus-ucabiqx-x.comp0235.condenser.arc.ucl.ac.uk/graph](https://prometheus-ucabiqx-x.comp0235.condenser.arc.ucl.ac.uk/graph)
+- **Prometheus** at [https://prometheus-ucabiqx.comp0235.condenser.arc.ucl.ac.uk/graph](https://prometheus-ucabiqx.comp0235.condenser.arc.ucl.ac.uk/graph)
 
 ### 4. **Configure All Nodes**
 

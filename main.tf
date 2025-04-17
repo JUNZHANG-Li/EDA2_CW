@@ -47,11 +47,11 @@ resource "harvester_virtualmachine" "hostvm" {
   tags = {
     condenser_ingress_isAllowed           = true
     condenser_ingress_isEnabled           = true
-    condenser_ingress_prometheus_hostname = "prometheus-${var.username}-x"
+    condenser_ingress_prometheus_hostname = "prometheus-${var.username}"
     condenser_ingress_prometheus_port     = 9090
-    condenser_ingress_nodeexporter_hostname = "nodeexporter-${var.username}-x"
+    condenser_ingress_nodeexporter_hostname = "nodeexporter-${var.username}"
     condenser_ingress_nodeexporter_port   = 9100
-    condenser_ingress_grafana_hostname    = "grafana-${var.username}-x"
+    condenser_ingress_grafana_hostname    = "grafana-${var.username}"
     condenser_ingress_grafana_port        = 3000
   }
 
@@ -103,7 +103,7 @@ resource "harvester_virtualmachine" "workervm" {
   tags = {
     condenser_ingress_isAllowed     = true
     condenser_ingress_isEnabled     = true
-    condenser_ingress_node_hostname = "node-${var.username}-x" # Consider making this unique per node if needed
+    condenser_ingress_node_hostname = "node-${var.username}" # Consider making this unique per node if needed
     condenser_ingress_node_port     = 9100
   }
 

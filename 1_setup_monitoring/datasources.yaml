@@ -4,7 +4,7 @@ datasources:
   - name: Prometheus
     type: prometheus
     access: proxy
-    url: "https://prometheus-ucabiqx-x.comp0235.condenser.arc.ucl.ac.uk/"
+    url: "https://prometheus-ucabiqx.comp0235.condenser.arc.ucl.ac.uk/"
     isDefault: true
     editable: true
     basicAuth: false
