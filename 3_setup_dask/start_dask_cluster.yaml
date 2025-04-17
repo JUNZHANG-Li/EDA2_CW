@@ -1,24 +1,36 @@
+---
+# Playbook: deploy_dask_services_no_handlers.yml
+
 - name: Configure and start Dask Scheduler service on Host
   hosts: hostnode
   become: true
   tasks:
     - name: Create Dask scheduler systemd service file
       ansible.builtin.template:
-        # --- CORRECTED PATH ---
-        src: files/dask-scheduler.service.j2 
-        # --- END CORRECTION ---
+        src: files/dask-scheduler.service.j2 # Ensure this path is correct
         dest: /etc/systemd/system/dask-scheduler.service
         owner: root
         group: root
         mode: '0644'
-      notify: Restart dask-scheduler 
+      register: scheduler_template_result # Register the result
+
+    - name: Reload systemd daemon if scheduler template changed
+      ansible.builtin.systemd:
+        daemon_reload: yes
+      when: scheduler_template_result.changed # Run only if template was modified
 
     - name: Ensure Dask scheduler service is enabled and running
       ansible.builtin.systemd:
         name: dask-scheduler
-        state: started
-        enabled: yes
-        daemon_reload: yes 
+        state: started # Ensures it's running (starts if stopped)
+        enabled: yes   # Ensures it starts on boot
+
+    # Explicitly restart only if the template changed
+    - name: Restart Dask scheduler service if template changed
+      ansible.builtin.systemd:
+        name: dask-scheduler
+        state: restarted
+      when: scheduler_template_result.changed # Run only if template was modified
 
 - name: Configure and start Dask Worker services on Workers
   hosts: workers
@@ -30,40 +42,33 @@
       ansible.builtin.file:
         path: "{{ worker_data_mount_point }}/dask-worker-space"
         state: directory
-        owner: root 
-        group: root 
+        owner: root # Adjust ownership if dask worker runs as non-root
+        group: root # Adjust ownership if dask worker runs as non-root
         mode: '0755'
 
     - name: Create Dask worker systemd service file
       ansible.builtin.template:
-        # --- CORRECTED PATH ---
-        src: files/dask-worker.service.j2 
-        # --- END CORRECTION ---
+        src: files/dask-worker.service.j2 # Ensure this path is correct
         dest: /etc/systemd/system/dask-worker.service
         owner: root
         group: root
         mode: '0644'
-      notify: Restart dask-worker 
+      register: worker_template_result # Register the result
+
+    - name: Reload systemd daemon if worker template changed
+      ansible.builtin.systemd:
+        daemon_reload: yes
+      when: worker_template_result.changed # Run only if template was modified
 
     - name: Ensure Dask worker service is enabled and running
       ansible.builtin.systemd:
         name: dask-worker
-        state: started
-        enabled: yes
-        daemon_reload: yes 
+        state: started # Ensures it's running (starts if stopped)
+        enabled: yes   # Ensures it starts on boot
 
-# --- HANDLERS DEFINED HERE AT THE TOP LEVEL ---
-  handlers:
-    - name: Reload systemd daemon 
-      ansible.builtin.systemd:
-        daemon_reload: yes
-
-    - name: Restart dask-scheduler
-      ansible.builtin.systemd:
-        name: dask-scheduler
-        state: restarted
-
-    - name: Restart dask-worker
+    # Explicitly restart only if the template changed
+    - name: Restart Dask worker service if template changed
       ansible.builtin.systemd:
         name: dask-worker
         state: restarted
+      when: worker_template_result.changed # Run only if template was modified
