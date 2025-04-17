@@ -13,6 +13,7 @@ Group=root
 # --memory-limit: Max RAM per worker process (e.g., 'auto' or specific value like '30GiB' total / nworkers)
 # --local-directory: Scratch space for the worker (use the mounted data disk!)
 ExecStart=/usr/local/bin/dask-worker {{ hostvars[groups['hostnode'][0]]['ip'] }}:8786 \
+    --preload /opt/comp0239_coursework/scripts/preload_torch.py \
     --nworkers {{ ansible_processor_vcpus }} \
     --nthreads 1 \
     --memory-limit auto \
