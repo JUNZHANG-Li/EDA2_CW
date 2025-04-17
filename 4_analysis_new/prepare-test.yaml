@@ -1,4 +1,3 @@
-# Filename: prepare-test.yaml (URL Version)
 - name: Prepare Host Node for Capacity Test
   hosts: hostnode
   become: true
@@ -9,34 +8,39 @@
     scripts_dir: "{{ base_dir }}/scripts"
     output_dir: "{{ base_dir }}/output"
 
-    # --- CHANGE: Variable name and comment clarity ---
+    # --- User Configuration ---
+    target_user: almalinux # <--- Ensure this matches the user SSHing in later
+
+    # --- Output File Configuration ---
     url_list_file_name: "image_urls_to_process.txt" # More descriptive name
     url_list_file_path: "{{ output_dir }}/{{ url_list_file_name }}" # Full path to the generated URL list
 
+    # --- Parquet File Download ---
     parquet_file_urls:
       - url: "https://huggingface.co/datasets/bitmind/open-images-v7/resolve/main/data/train-00000-of-00002.parquet?download=true"
         filename: "train-00000-of-00002.parquet"
       - url: "https://huggingface.co/datasets/bitmind/open-images-v7/resolve/main/data/train-00001-of-00002.parquet?download=true"
         filename: "train-00001-of-00002.parquet"
 
+    # --- Generator Script Configuration ---
     generator_script_local_path: "./generate_id_list.py" # Assumes script filename didn't change
     generator_script_remote_path: "{{ scripts_dir }}/generate_id_list.py"
 
     url_column_name: "url" # Column in Parquet to read URLs from
     target_url_pool_count: 15000000 # Target number of unique URLs
 
+    # --- Test Runner Script Configuration ---
     runner_script_local_path: "./run_capacity_test.py" # Assumes script filename didn't change
     runner_script_remote_path: "{{ scripts_dir }}/run_capacity_test.py"
 
   tasks:
-    # 1. System Setup (No changes needed)
-    - name: Ensure target directories exist
+    - name: Ensure target directories exist and have correct ownership
       ansible.builtin.file:
         path: "{{ item }}"
         state: directory
         mode: '0755'
-        owner: root
-        group: root
+        owner: "{{ target_user }}"
+        group: "{{ target_user }}"
       loop:
         - "{{ base_dir }}"
         - "{{ metadata_dir }}"
@@ -51,18 +55,21 @@
           - requests>=2.0
           - dask>=2023.0
           - distributed>=2023.0
-          - Pillow>=9.0 # Explicitly add Pillow for runner
-          - torch # Add torch/torchvision here if not installed separately
+          - Pillow>=9.0
+          - torch # Ensure all necessary runtime libs are here
           - torchvision
         state: present
         executable: pip3
 
-    # 2. Download Parquet Files (No changes needed)
+    # 2. Download Parquet Files
     - name: Download OpenImages Parquet files
       ansible.builtin.get_url:
         url: "{{ item.url }}"
         dest: "{{ metadata_dir }}/{{ item.filename }}"
         mode: '0644'
+        # Set ownership during download if possible, otherwise rely on directory ownership
+        owner: "{{ target_user }}"
+        group: "{{ target_user }}"
         force: no
       loop: "{{ parquet_file_urls }}"
       register: download_results
@@ -70,21 +77,25 @@
       retries: 3
       delay: 5
 
-    # 3. Deploy Python Scripts (No changes needed)
+    # 3. Deploy Python Scripts
     - name: Copy URL list generator script to host node
       ansible.builtin.copy:
         src: "{{ generator_script_local_path }}"
         dest: "{{ generator_script_remote_path }}"
-        mode: '0755'
+        mode: '0755' # Make executable
+        owner: "{{ target_user }}" # Ensure user can execute
+        group: "{{ target_user }}"
 
     - name: Copy Capacity Test runner script to host node
       ansible.builtin.copy:
         src: "{{ runner_script_local_path }}"
         dest: "{{ runner_script_remote_path }}"
-        mode: '0755'
+        mode: '0755' # Make executable
+        owner: "{{ target_user }}" # Ensure user can execute
+        group: "{{ target_user }}"
 
     # 4. Run Generator Script to Create URL Pool File
-    - name: Execute image URL list generator script # Updated task name
+    - name: Execute image URL list generator script
       ansible.builtin.command:
         cmd: > 
           python3 {{ generator_script_remote_path }}
@@ -92,17 +103,26 @@
           --url-col {{ url_column_name }}
           --output {{ url_list_file_path }}
           --count {{ target_url_pool_count }}
-        creates: "{{ url_list_file_path }}" 
+        creates: "{{ url_list_file_path }}"
       register: script_execution
       changed_when: script_execution.rc == 0 and "'Successfully wrote' in script_execution.stdout"
       failed_when: script_execution.rc != 0
 
-    # 5. Verification (Updated paths/messages)
+    # 5. Ensure final output file ownership is correct (redundant if dir is correct, but safe)
+    - name: Verify output URL list file ownership
+      ansible.builtin.file:
+        path: "{{ url_list_file_path }}"
+        owner: "{{ target_user }}"
+        group: "{{ target_user }}"
+        mode: '0644' # User needs read access
+      when: script_execution is succeeded and output_file_stat.stat.exists # Check if file exists from previous verification
+
+    # 6. Verification (Stat task needs to run before ownership check above)
     - name: Verify output URL list file exists
       ansible.builtin.stat:
-        path: "{{ url_list_file_path }}" # Use updated variable
+        path: "{{ url_list_file_path }}"
       register: output_file_stat
-      when: script_execution is succeeded
+      when: script_execution is succeeded # Check only if command succeeded
 
     - name: Fail if URL list file was not created
       ansible.builtin.fail:
@@ -113,5 +133,5 @@
 
     - name: Display path to generated URL list file
       ansible.builtin.debug:
-         msg: "Image URL list prepared at {{ url_list_file_path }} on host {{ inventory_hostname }}" # Use updated variable
+         msg: "Image URL list prepared at {{ url_list_file_path }} on host {{ inventory_hostname }}"
       when: output_file_stat.stat.exists
