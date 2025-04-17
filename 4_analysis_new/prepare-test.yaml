@@ -1,14 +1,18 @@
+# Filename: prepare-test.yaml (URL Version with Ownership Fix)
 - name: Prepare Host Node for Capacity Test
-  hosts: hostnode
-  become: true
+  hosts: hostnode # Run this only on the host node
+  become: true    # Needed for installing packages and managing directories/permissions
 
   vars:
-    base_dir: "/opt/comp0239_coursework"
-    metadata_dir: "{{ base_dir }}/metadata"
-    scripts_dir: "{{ base_dir }}/scripts"
-    output_dir: "{{ base_dir }}/output"
+    # --- Directory Configuration on Host Node ---
+    base_dir: "/opt/comp0239_coursework" # Base directory for coursework files
+    metadata_dir: "{{ base_dir }}/metadata"   # Directory for downloaded parquet files
+    scripts_dir: "{{ base_dir }}/scripts"     # Directory for our python scripts
+    output_dir: "{{ base_dir }}/output"      # Directory for the final URL list & test results
 
     # --- User Configuration ---
+    # Define the user that will run the test script later
+    # Needs write permissions to the output_dir
     target_user: almalinux # <--- Ensure this matches the user SSHing in later
 
     # --- Output File Configuration ---
@@ -23,29 +27,38 @@
         filename: "train-00001-of-00002.parquet"
 
     # --- Generator Script Configuration ---
-    generator_script_local_path: "./generate_id_list.py" # Assumes script filename didn't change
-    generator_script_remote_path: "{{ scripts_dir }}/generate_id_list.py"
+    generator_script_local_path: "./generate_id_list.py" # LOCAL path (relative to playbook)
+    generator_script_remote_path: "{{ scripts_dir }}/generate_id_list.py" # REMOTE path on host node
 
     url_column_name: "url" # Column in Parquet to read URLs from
     target_url_pool_count: 15000000 # Target number of unique URLs
 
     # --- Test Runner Script Configuration ---
-    runner_script_local_path: "./run_capacity_test.py" # Assumes script filename didn't change
-    runner_script_remote_path: "{{ scripts_dir }}/run_capacity_test.py"
+    runner_script_local_path: "./run_capacity_test.py" # LOCAL path (relative to playbook)
+    runner_script_remote_path: "{{ scripts_dir }}/run_capacity_test.py" # REMOTE path on host node
 
   tasks:
+    # 1. System Setup
     - name: Ensure target directories exist and have correct ownership
       ansible.builtin.file:
         path: "{{ item }}"
         state: directory
         mode: '0755'
-        owner: "{{ target_user }}"
-        group: "{{ target_user }}"
+        owner: "{{ target_user }}" # *** UPDATED: Set owner to target_user ***
+        group: "{{ target_user }}" # *** UPDATED: Set group to target_user ***
       loop:
         - "{{ base_dir }}"
         - "{{ metadata_dir }}"
         - "{{ scripts_dir }}"
-        - "{{ output_dir }}"
+        - "{{ output_dir }}" # Ensures output dir has correct permissions
+
+    - name: Install OS dependencies (wget, python3-pip)
+      ansible.builtin.package:
+        name:
+          - wget
+          - python3-pip
+        state: present
+        update_cache: yes
 
     - name: Install Python dependencies for scripts
       ansible.builtin.pip:
@@ -95,9 +108,13 @@
         group: "{{ target_user }}"
 
     # 4. Run Generator Script to Create URL Pool File
+    # Note: Running this command as root (due to become: true), but output file
+    # should be writable by target_user because the directory ownership was set.
+    # Alternatively, remove become from this task and run as target_user if sudo allows.
     - name: Execute image URL list generator script
       ansible.builtin.command:
-        cmd: > 
+        # Using cmd module for simplicity here
+        cmd: >
           python3 {{ generator_script_remote_path }}
           --meta-dir {{ metadata_dir }}
           --url-col {{ url_column_name }}
