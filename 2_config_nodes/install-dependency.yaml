@@ -7,6 +7,8 @@
         name:
           - torch
           - transformers
+          - pandas
+          - pyarrow
           - numpy
           - "bokeh>=2.4.2,!=3.0.*"
         state: present
