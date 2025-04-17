@@ -8,7 +8,8 @@
           - torch
           - transformers
           - numpy
-        state: latest
+          - "bokeh>=2.4.2,!=3.0.*"
+        state: present
         executable: /usr/bin/pip3
         extra_args: --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cpu
 
