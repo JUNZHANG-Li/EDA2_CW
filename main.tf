@@ -53,6 +53,8 @@ resource "harvester_virtualmachine" "hostvm" {
     condenser_ingress_nodeexporter_port   = 9100
     condenser_ingress_grafana_hostname    = "grafana-${var.username}"
     condenser_ingress_grafana_port        = 3000
+    condenser_ingress_daskboard_hostname  = "daskboard-${var.username}"
+    condenser_ingress_daskboard_port      = 8787
   }
 
   network_interface {

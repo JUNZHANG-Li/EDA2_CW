@@ -2,25 +2,25 @@
   hosts: all
   become: yes
   tasks:
-    - name: Install Dask (Distributed Computing Framework) globally
+    - name: Install Dask (Distributed Computing Framework)
       ansible.builtin.pip:
         name: dask[distributed]
         state: present
 
-- name: Install Worker-Specific Python Packages Globally
+- name: Install Worker-Specific Python Packages
   hosts: workers
-  become: yes # Required for global pip install
+  become: yes
   tasks:
-    - name: Install Requests (Data Handling) globally
+    - name: Install Requests (Data Handling)
       ansible.builtin.pip:
         name: requests
         state: present
 
-- name: Install Host-Specific Python Packages Globally
+- name: Install Host-Specific Python Packages
   hosts: hostnode
-  become: yes # Required for global pip install
+  become: yes
   tasks:
-    - name: Install Flask (User Interface) globally
+    - name: Install Flask (User Interface)
       ansible.builtin.pip:
         name: Flask
         state: present

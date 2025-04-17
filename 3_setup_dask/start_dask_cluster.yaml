@@ -1,0 +1,68 @@
+---
+- name: Configure and start Dask Scheduler service on Host
+  hosts: hostnode
+  become: true
+  tasks:
+    - name: Create Dask scheduler systemd service file
+      ansible.builtin.template:
+        src: files/dask-scheduler.service.j2
+        dest: /etc/systemd/system/dask-scheduler.service
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Restart dask-scheduler
+
+    - name: Ensure Dask scheduler service is enabled and running
+      ansible.builtin.systemd:
+        name: dask-scheduler
+        state: started
+        enabled: yes
+        daemon_reload: yes
+
+- name: Configure and start Dask Worker services on Workers
+  hosts: workers
+  become: true
+  vars:
+    worker_data_mount_point: /data # Match the mount point from your disk setup
+  tasks:
+    - name: Ensure Dask worker scratch directory exists
+      ansible.builtin.file:
+        path: "{{ worker_data_mount_point }}/dask-worker-space"
+        state: directory
+        owner: root # Match the user the service runs as
+        group: root # Match the group the service runs as
+        mode: '0755'
+
+    - name: Create Dask worker systemd service file
+      ansible.builtin.template:
+        src: files/dask-worker.service.j2
+        dest: /etc/systemd/system/dask-worker.service
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Restart dask-worker
+
+    - name: Ensure Dask worker service is enabled and running
+      ansible.builtin.systemd:
+        name: dask-worker
+        state: started
+        enabled: yes
+        daemon_reload: yes
+
+  handlers: # Handlers defined at the end of the file
+    - name: Reload systemd daemon
+      ansible.builtin.systemd:
+        daemon_reload: yes
+      listen: "Reload systemd" # Common listener for both plays
+
+    - name: Restart dask-scheduler
+      ansible.builtin.systemd:
+        name: dask-scheduler
+        state: restarted
+      listen: "Restart dask-scheduler"
+
+    - name: Restart dask-worker
+      ansible.builtin.systemd:
+        name: dask-worker
+        state: restarted
+      listen: "Restart dask-worker"

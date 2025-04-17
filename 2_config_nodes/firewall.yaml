@@ -27,6 +27,9 @@
     - name: allow SSH access
       ansible.builtin.shell: "ufw allow ssh"
 
+    - name: allow Dask Dashboard access
+      ansible.builtin.shell: "ufw allow 8787"
+
     - name: allow S3 access
       ansible.builtin.shell: "ufw allow 9000"
 

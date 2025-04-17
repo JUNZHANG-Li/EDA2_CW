@@ -1,0 +1,24 @@
+[Unit]
+Description=Dask Worker
+After=network.target
+
+[Service]
+User=root
+Group=root
+WorkingDirectory=/root # Or user's home directory
+# Connect worker to the scheduler running on the host node
+# Use the internal IP of the host node
+# --nworkers: number of worker processes (often match CPU cores)
+# --nthreads: threads per worker process (often 1 if CPU bound, >1 if IO bound)
+# --memory-limit: Max RAM per worker process (e.g., 'auto' or specific value like '30GiB' total / nworkers)
+# --local-directory: Scratch space for the worker (use the mounted data disk!)
+ExecStart=/usr/local/bin/dask-worker {{ hostvars[groups['hostnode'][0]]['ip'] }}:8786 \
+    --nworkers {{ ansible_processor_vcpus }} \
+    --nthreads 1 \
+    --memory-limit auto \
+    --local-directory {{ worker_data_mount_point }}/dask-worker-space \
+    --name worker-{{ ansible_hostname }}
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

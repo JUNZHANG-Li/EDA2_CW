@@ -1,0 +1,18 @@
+[Unit]
+Description=Dask Scheduler
+After=network.target
+
+[Service]
+# Consider running as a dedicated user or the primary user (e.g., almalinux)
+# If running as non-root, ensure necessary directory permissions
+User=root 
+Group=root
+WorkingDirectory=/root # Or user's home directory if running as user
+# Start the scheduler, listen on all interfaces
+# Port 8786 is the default for scheduler communication
+# Port 8787 is the default for the dashboard (ensure it's accessible/firewalled)
+ExecStart=/usr/local/bin/dask-scheduler --port 8786 --dashboard-address :8787 
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
