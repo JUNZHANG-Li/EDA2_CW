@@ -1,41 +1,32 @@
-# Filename: prepare-test.yaml (URL Version with Ownership Fix)
+# Filename: prepare-test.yaml (URL Version with Ownership Fix - Corrected Order)
 - name: Prepare Host Node for Capacity Test
-  hosts: hostnode # Run this only on the host node
-  become: true    # Needed for installing packages and managing directories/permissions
+  hosts: hostnode
+  become: true
 
   vars:
-    # --- Directory Configuration on Host Node ---
-    base_dir: "/opt/comp0239_coursework" # Base directory for coursework files
-    metadata_dir: "{{ base_dir }}/metadata"   # Directory for downloaded parquet files
-    scripts_dir: "{{ base_dir }}/scripts"     # Directory for our python scripts
-    output_dir: "{{ base_dir }}/output"      # Directory for the final URL list & test results
+    base_dir: "/opt/comp0239_coursework"
+    metadata_dir: "{{ base_dir }}/metadata"
+    scripts_dir: "{{ base_dir }}/scripts"
+    output_dir: "{{ base_dir }}/output"
+    target_user: almalinux # Define the user variable
 
-    # --- User Configuration ---
-    # Define the user that will run the test script later
-    # Needs write permissions to the output_dir
-    target_user: almalinux # <--- Ensure this matches the user SSHing in later
+    url_list_file_name: "image_urls_to_process.txt"
+    url_list_file_path: "{{ output_dir }}/{{ url_list_file_name }}"
 
-    # --- Output File Configuration ---
-    url_list_file_name: "image_urls_to_process.txt" # More descriptive name
-    url_list_file_path: "{{ output_dir }}/{{ url_list_file_name }}" # Full path to the generated URL list
-
-    # --- Parquet File Download ---
     parquet_file_urls:
       - url: "https://huggingface.co/datasets/bitmind/open-images-v7/resolve/main/data/train-00000-of-00002.parquet?download=true"
         filename: "train-00000-of-00002.parquet"
       - url: "https://huggingface.co/datasets/bitmind/open-images-v7/resolve/main/data/train-00001-of-00002.parquet?download=true"
         filename: "train-00001-of-00002.parquet"
 
-    # --- Generator Script Configuration ---
-    generator_script_local_path: "./generate_id_list.py" # LOCAL path (relative to playbook)
-    generator_script_remote_path: "{{ scripts_dir }}/generate_id_list.py" # REMOTE path on host node
+    generator_script_local_path: "./generate_id_list.py"
+    generator_script_remote_path: "{{ scripts_dir }}/generate_id_list.py"
 
-    url_column_name: "url" # Column in Parquet to read URLs from
-    target_url_pool_count: 15000000 # Target number of unique URLs
+    url_column_name: "url"
+    target_url_pool_count: 15000000
 
-    # --- Test Runner Script Configuration ---
-    runner_script_local_path: "./run_capacity_test.py" # LOCAL path (relative to playbook)
-    runner_script_remote_path: "{{ scripts_dir }}/run_capacity_test.py" # REMOTE path on host node
+    runner_script_local_path: "./run_capacity_test.py"
+    runner_script_remote_path: "{{ scripts_dir }}/run_capacity_test.py"
 
   tasks:
     # 1. System Setup
@@ -44,13 +35,13 @@
         path: "{{ item }}"
         state: directory
         mode: '0755'
-        owner: "{{ target_user }}" # *** UPDATED: Set owner to target_user ***
-        group: "{{ target_user }}" # *** UPDATED: Set group to target_user ***
+        owner: "{{ target_user }}"
+        group: "{{ target_user }}"
       loop:
         - "{{ base_dir }}"
         - "{{ metadata_dir }}"
         - "{{ scripts_dir }}"
-        - "{{ output_dir }}" # Ensures output dir has correct permissions
+        - "{{ output_dir }}"
 
     - name: Install OS dependencies (wget, python3-pip)
       ansible.builtin.package:
@@ -69,7 +60,7 @@
           - dask>=2023.0
           - distributed>=2023.0
           - Pillow>=9.0
-          - torch # Ensure all necessary runtime libs are here
+          - torch
           - torchvision
         state: present
         executable: pip3
@@ -80,7 +71,6 @@
         url: "{{ item.url }}"
         dest: "{{ metadata_dir }}/{{ item.filename }}"
         mode: '0644'
-        # Set ownership during download if possible, otherwise rely on directory ownership
         owner: "{{ target_user }}"
         group: "{{ target_user }}"
         force: no
@@ -95,25 +85,21 @@
       ansible.builtin.copy:
         src: "{{ generator_script_local_path }}"
         dest: "{{ generator_script_remote_path }}"
-        mode: '0755' # Make executable
-        owner: "{{ target_user }}" # Ensure user can execute
+        mode: '0755'
+        owner: "{{ target_user }}"
         group: "{{ target_user }}"
 
     - name: Copy Capacity Test runner script to host node
       ansible.builtin.copy:
         src: "{{ runner_script_local_path }}"
         dest: "{{ runner_script_remote_path }}"
-        mode: '0755' # Make executable
-        owner: "{{ target_user }}" # Ensure user can execute
+        mode: '0755'
+        owner: "{{ target_user }}"
         group: "{{ target_user }}"
 
     # 4. Run Generator Script to Create URL Pool File
-    # Note: Running this command as root (due to become: true), but output file
-    # should be writable by target_user because the directory ownership was set.
-    # Alternatively, remove become from this task and run as target_user if sudo allows.
     - name: Execute image URL list generator script
       ansible.builtin.command:
-        # Using cmd module for simplicity here
         cmd: >
           python3 {{ generator_script_remote_path }}
           --meta-dir {{ metadata_dir }}
@@ -125,30 +111,37 @@
       changed_when: script_execution.rc == 0 and "'Successfully wrote' in script_execution.stdout"
       failed_when: script_execution.rc != 0
 
-    # 5. Ensure final output file ownership is correct (redundant if dir is correct, but safe)
+    # *** --- CORRECTED ORDER FOR VERIFICATION/OWNERSHIP --- ***
+
+    # 5. Verify output URL list file exists (using stat)
+    - name: Verify output URL list file exists
+      ansible.builtin.stat:
+        path: "{{ url_list_file_path }}"
+      register: output_file_stat # Register the result here
+      when: script_execution is succeeded # Only run stat if the command was successful
+
+    # 6. Ensure final output file ownership is correct
     - name: Verify output URL list file ownership
       ansible.builtin.file:
         path: "{{ url_list_file_path }}"
         owner: "{{ target_user }}"
         group: "{{ target_user }}"
-        mode: '0644' # User needs read access
-      when: script_execution is succeeded and output_file_stat.stat.exists # Check if file exists from previous verification
+        mode: '0644'
+      # Condition now uses the registered variable correctly
+      when: script_execution is succeeded and output_file_stat.stat.exists
 
-    # 6. Verification (Stat task needs to run before ownership check above)
-    - name: Verify output URL list file exists
-      ansible.builtin.stat:
-        path: "{{ url_list_file_path }}"
-      register: output_file_stat
-      when: script_execution is succeeded # Check only if command succeeded
-
+    # 7. Fail if URL list file was not created
     - name: Fail if URL list file was not created
       ansible.builtin.fail:
         msg: "Image URL list generation failed. Check script logs or run manually on host. stdout: {{ script_execution.stdout | default('N/A') }} stderr: {{ script_execution.stderr | default('N/A') }}"
+      # Condition now uses the registered variable correctly
       when:
         - script_execution is succeeded
         - not output_file_stat.stat.exists
 
+    # 8. Display path to generated URL list file
     - name: Display path to generated URL list file
       ansible.builtin.debug:
          msg: "Image URL list prepared at {{ url_list_file_path }} on host {{ inventory_hostname }}"
+      # Condition now uses the registered variable correctly
       when: output_file_stat.stat.exists
