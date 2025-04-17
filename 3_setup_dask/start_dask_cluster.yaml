@@ -1,4 +1,3 @@
----
 - name: Configure and start Dask Scheduler service on Host
   hosts: hostnode
   become: true
@@ -54,17 +53,17 @@
         daemon_reload: yes 
 
 # --- HANDLERS DEFINED HERE AT THE TOP LEVEL ---
-handlers:
-  - name: Reload systemd daemon 
-    ansible.builtin.systemd:
-      daemon_reload: yes
+  handlers:
+    - name: Reload systemd daemon 
+      ansible.builtin.systemd:
+        daemon_reload: yes
 
-  - name: Restart dask-scheduler
-    ansible.builtin.systemd:
-      name: dask-scheduler
-      state: restarted
+    - name: Restart dask-scheduler
+      ansible.builtin.systemd:
+        name: dask-scheduler
+        state: restarted
 
-  - name: Restart dask-worker
-    ansible.builtin.systemd:
-      name: dask-worker
-      state: restarted
+    - name: Restart dask-worker
+      ansible.builtin.systemd:
+        name: dask-worker
+        state: restarted
