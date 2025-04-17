@@ -29,7 +29,7 @@
     generator_script_remote_path: "{{ scripts_dir }}/generate_id_list.py" # REMOTE path on host node
 
     # Arguments for the generator script (verify image_id_column!)
-    image_id_column: "image_id" 
+    url_column_name: "url" 
     target_id_pool_count: 15000000 # Generate a large pool, > expected 24h throughput
 
     # --- Test Runner Script Configuration ---
@@ -63,13 +63,11 @@
     - name: Install Python dependencies (pandas, pyarrow for generator; requests, dask, distributed for runner)
       ansible.builtin.pip:
         name:
-          - pandas>=1.0 # Specify versions if needed
+          - pandas>=1.0
           - pyarrow>=10.0
           - requests>=2.0
-          - dask>=2023.0 # Match versions if necessary
+          - dask>=2023.0
           - distributed>=2023.0 
-          # Add torch, torchvision, Pillow dependencies here IF running test script requires them directly on host
-          # Usually only needed on workers, but good practice to have dask/distributed matching runner script
         state: present
         executable: pip3
 
@@ -79,7 +77,7 @@
         url: "{{ item.url }}"
         dest: "{{ metadata_dir }}/{{ item.filename }}"
         mode: '0644'
-        force: no # Avoid re-downloading
+        force: no
       loop: "{{ parquet_file_urls }}"
       register: download_results
       until: download_results is succeeded
@@ -105,13 +103,13 @@
         cmd: >
           python3 {{ generator_script_remote_path }}
           --meta-dir {{ metadata_dir }}
-          --id-col {{ image_id_column }}
+          --url-col {{ url_column_name }}
           --output {{ id_list_file_path }}
           --count {{ target_id_pool_count }}
-        creates: "{{ id_list_file_path }}" # Makes this step idempotent
+        creates: "{{ id_list_file_path }}" 
       register: script_execution
-      changed_when: script_execution.rc == 0 and "'Successfully wrote' in script_execution.stdout"
-      failed_when: script_execution.rc != 0
+      changed_when: script_execution.rc == 0 and "'Successfully wrote' in script_execution.stdout" 
+      failed_when: script_execution.rc != 0 
 
     # 5. Verification (Optional)
     - name: Verify output ID list file exists
