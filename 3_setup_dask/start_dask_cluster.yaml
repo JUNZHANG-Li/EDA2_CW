@@ -30,7 +30,7 @@
   become: true
   vars:
     worker_data_mount_point: /data # Match the mount point from your disk setup
-    preload_script_local_path: "./preload_torch.py"
+    preload_script_local_path: "./files/preload_torch.py"
     preload_script_remote_path: "/opt/comp0239_coursework/scripts/preload_torch.py"
     target_user: almalinux
 
