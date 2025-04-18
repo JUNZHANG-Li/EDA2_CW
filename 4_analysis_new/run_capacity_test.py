@@ -1,3 +1,4 @@
+# Filename: run_capacity_test.py (URL Version - Fixed TimeoutError & discard)
 import time
 import datetime
 import argparse
@@ -11,7 +12,8 @@ import sys
 import re # Import regex for ID extraction
 
 # Dask libraries
-from dask.distributed import Client, as_completed, Actor, Future
+# --- FIX: Import TimeoutError explicitly ---
+from dask.distributed import Client, as_completed, Actor, Future, TimeoutError
 
 # --- Configuration ---
 DEFAULT_BASE_DIR = "/opt/comp0239_coursework"
@@ -117,8 +119,7 @@ def process_image(image_url, model_actor_future):
 
     image_id = extract_id_from_url(image_url)
     if not image_id:
-        # print(f"Worker ERROR: Could not extract ID from URL: {image_url}") # Use print/log if needed
-        return (image_url, "ERROR_ID_EXTRACTION_FAILED") # Return URL if ID fails
+        return (image_url, "ERROR_ID_EXTRACTION_FAILED")
 
     local_path = DOWNLOAD_DIR_TEMPLATE.format(image_id=image_id)
     local_dir = os.path.dirname(local_path)
@@ -140,15 +141,11 @@ def process_image(image_url, model_actor_future):
         model_actor = model_actor_future.result(timeout=60)
         prediction = model_actor.predict(image_bytes)
 
-        return (image_id, prediction) # Return extracted ID and prediction
+        return (image_id, prediction)
 
     except requests.exceptions.RequestException as e:
-        # print(f"Worker WARN: Download failed for {image_id} from {image_url}: {e}")
         return (image_id, f"ERROR_DOWNLOAD_{e.__class__.__name__}")
     except Exception as e:
-        # print(f"Worker ERROR: Processing failed for {image_id}: {e}")
-        # import traceback
-        # print(traceback.format_exc())
         return (image_id, f"ERROR_PROCESSING_{e.__class__.__name__}")
 
 
@@ -200,7 +197,6 @@ if __name__ == "__main__":
         model_actor_future.result(timeout=30)
         log.info("Model actor deployment task submitted/ready.")
 
-        # --- FIX: Removed batch_size ---
         futures = as_completed()
 
         with open(args.urls, 'r') as url_file, open(args.output, 'w') as outfile:
@@ -217,7 +213,7 @@ if __name__ == "__main__":
                         image_url = next(url_file).strip()
                         if image_url:
                             future = client.submit(process_image, image_url, model_actor_future, pure=False)
-                            futures.add(future)
+                            futures.add(future) # Add submitted future to the as_completed set
                             submitted_count += 1
                             current_batch += 1
                     except StopIteration:
@@ -230,12 +226,12 @@ if __name__ == "__main__":
 
                 if current_batch == 0 and time.time() >= end_time: break
 
-                # --- FIX: Process results by iterating directly over as_completed ---
                 processed_in_batch = 0
                 # Iterate directly over the as_completed object
+                # This yields futures as they complete. The loop might process 0 to many futures.
                 for future in futures:
                     try:
-                        # Check status before calling result (good practice)
+                        # Check status before calling result
                         if future.status == 'finished':
                             result = future.result(timeout=1) # Short timeout ok
                             if result and result[0] is not None:
@@ -246,32 +242,31 @@ if __name__ == "__main__":
                             elif result and result[0] is None:
                                  log.warning(f"Task returned None ID with result: {result[1]}")
                                  error_count += 1
-                            # Remove processed future from the set
-                            futures.discard(future)
+                            # *** FIX: Removed futures.discard ***
 
                         elif future.status == 'error':
-                           log.error(f"Task failed with exception: {future.exception()}")
+                           log.error(f"Task {future.key} failed with exception: {future.exception()}")
                            error_count +=1
-                           futures.discard(future) # Remove failed future
+                           # *** FIX: Removed futures.discard ***
 
                         # Optional: Limit processing in one go to keep submitting
                         if processed_in_batch > 1000:
-                            break # Exit inner loop to submit more if needed
+                            break # Exit inner loop to potentially submit more
 
-                    except Future.TimeoutError:
-                         log.warning("Timeout getting result from future.")
-                         # Do not discard, will try again in next iteration
+                    # --- FIX: Catch dask.distributed.TimeoutError ---
+                    except TimeoutError:
+                         log.warning(f"Timeout getting result from future {future.key}. Will retry later.")
+                         # Do not discard, loop will eventually yield it again
                     except Exception as e:
-                        log.error(f"Failed to retrieve result: {e}", exc_info=True)
+                        log.error(f"Failed to retrieve result for {future.key}: {e}", exc_info=True)
                         error_count += 1
-                        # Remove failed future
-                        futures.discard(future)
+                        # *** FIX: Removed futures.discard ***
 
                 # Log progress
                 if submitted_count % 5000 == 0 or processed_in_batch > 0:
                     elapsed_time = time.time() - start_time
                     rate = results_count / elapsed_time if elapsed_time > 0 else 0
-                    # --- FIX: Use len(futures) for pending count ---
+                    # Use len(futures) to get accurate pending count from as_completed object
                     pending = len(futures)
                     log.info(f"Submitted: {submitted_count}, Results: {results_count} (Errors: {error_count}), "
                              f"Pending: {pending}, Rate: {rate:.2f} img/s, "
@@ -291,8 +286,7 @@ if __name__ == "__main__":
             # Iterate directly over remaining futures
             for future in futures:
                 try:
-                    # Longer timeout for final tasks
-                    result = future.result(timeout=300)
+                    result = future.result(timeout=300) # Longer timeout
                     if result and result[0] is not None:
                         outfile.write(f"{result[0]},{result[1]}\n")
                         if "ERROR" in str(result[1]): error_count += 1
@@ -300,15 +294,15 @@ if __name__ == "__main__":
                     elif result and result[0] is None:
                          log.warning(f"Task returned None ID during final wait: {result[1]}")
                          error_count += 1
-                except Future.TimeoutError:
-                     log.error("Timeout waiting for final task result.")
+                # --- FIX: Catch dask.distributed.TimeoutError ---
+                except TimeoutError:
+                     log.error(f"Timeout waiting for final task result for {future.key}.")
                      error_count += 1
                 except Exception as e:
-                    log.error(f"Failed to retrieve result during final wait: {e}", exc_info=True)
+                    log.error(f"Failed to retrieve result for {future.key} during final wait: {e}", exc_info=True)
                     error_count += 1
-                # No need to discard here as we are finishing
 
-                remaining_tasks -= 1 # Simple counter decrement
+                remaining_tasks -= 1
                 if remaining_tasks % 1000 == 0 and remaining_tasks > 0:
                     log.info(f"Waiting for {remaining_tasks} more tasks...")
 
@@ -321,8 +315,6 @@ if __name__ == "__main__":
             log.info("Closing Dask client connection...")
             try:
                  if 'model_actor_future' in locals() and model_actor_future.done():
-                      # Consider explicit actor deletion if needed/possible
-                      # del model_actor_future or client.cancel([model_actor_future])
                       pass
             except Exception as actor_err:
                  log.warning(f"Error during actor cleanup: {actor_err}")
