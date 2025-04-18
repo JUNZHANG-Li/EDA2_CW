@@ -9,7 +9,7 @@
         - glibc-langpack-en
         - vim
         - emacs
-        - nano
+        - vim
         - screen
         - tmux
         - net-tools

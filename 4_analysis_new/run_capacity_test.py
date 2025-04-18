@@ -224,7 +224,7 @@ if __name__ == "__main__":
         model_actor_future.result(timeout=30)
         log.info("Model actor deployment task submitted/ready.")
 
-        futures = as_completed(batch_size=2000)
+        futures = as_completed()
 
         # --- CHANGE: Read from URL file ---
         with open(args.urls, 'r') as url_file, open(args.output, 'w') as outfile:
