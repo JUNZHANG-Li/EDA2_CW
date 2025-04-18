@@ -43,23 +43,42 @@
         - "{{ scripts_dir }}"
         - "{{ output_dir }}"
 
-    # 2. Download Parquet Files (No change)
-    - name: Download OpenImages Parquet files
-      ansible.builtin.get_url:
-        url: "{{ item.url }}"
-        dest: "{{ metadata_dir }}/{{ item.filename }}"
-        mode: '0644'
-        owner: "{{ target_user }}"
-        group: "{{ target_user }}"
-        force: no
+    # 2. Download Parquet Files (with pre-check)
+    - name: Check for existing Parquet file and download if missing
+      vars:
+        # Define the destination path within the task's scope for clarity
+        parquet_dest_path: "{{ metadata_dir }}/{{ item.filename }}"
+      block:
+        - name: Check if Parquet file exists | {{ item.filename }}
+          ansible.builtin.stat:
+            path: "{{ parquet_dest_path }}"
+          register: parquet_stat_result
+
+        - name: Download Parquet file if it does not exist | {{ item.filename }}
+          ansible.builtin.get_url:
+            url: "{{ item.url }}"
+            dest: "{{ parquet_dest_path }}"
+            mode: '0644'
+            owner: "{{ target_user }}"
+            group: "{{ target_user }}"
+            force: no
+          when: not parquet_stat_result.stat.exists
+          register: download_results
+          until: download_results is succeeded
+          retries: 20
+          delay: 5
+
+        - name: Report status | {{ item.filename }}
+          ansible.builtin.debug:
+            msg: "{{ item.filename }} already exists."
+          when: parquet_stat_result.stat.exists
+
+      # Loop over the block for each file URL
       loop: "{{ parquet_file_urls }}"
-      register: download_results
-      until: download_results is succeeded
-      retries: 3
-      delay: 5
+      loop_control:
+        label: "{{ item.filename }}" # Makes Ansible output clearer
 
-
-    # 3. Deploy Python Scripts (No change)
+    # 3. Deploy Python Scripts
     - name: Copy URL list generator script to host node
       ansible.builtin.copy:
         src: "{{ generator_script_local_path }}"
@@ -77,7 +96,7 @@
         group: "{{ target_user }}"
 
 
-    # 4. Run Generator Script to Create URL Pool File (No change)
+    # 4. Run Generator Script to Create URL Pool Filefiles
     - name: Execute image URL list generator script
       ansible.builtin.command:
         cmd: >
@@ -92,7 +111,7 @@
       failed_when: script_execution.rc != 0
 
 
-    # 5. Verify output URL list file exists (No change)
+    # 5. Verify output URL list file existsfiles
     - name: Verify output URL list file exists
       ansible.builtin.stat:
         path: "{{ url_list_file_path }}"
@@ -100,7 +119,7 @@
       when: script_execution is succeeded
 
 
-    # 6. Ensure final output file ownership is correct (No change)
+    # 6. Ensure final output file ownership is correctfiles
     - name: Verify output URL list file ownership
       ansible.builtin.file:
         path: "{{ url_list_file_path }}"
@@ -110,7 +129,7 @@
       when: script_execution is succeeded and output_file_stat.stat.exists
 
 
-    # 7. Fail if URL list file was not created (No change)
+    # 7. Fail if URL list file was not createdfiles
     - name: Fail if URL list file was not created
       ansible.builtin.fail:
         msg: "Image URL list generation failed. Check script logs or run manually on host. stdout: {{ script_execution.stdout | default('N/A') }} stderr: {{ script_execution.stderr | default('N/A') }}"
@@ -119,7 +138,7 @@
         - not output_file_stat.stat.exists
 
 
-    # 8. Display path to generated URL list file (No change)
+    # 8. Display path to generated URL list filefiles
     - name: Display path to generated URL list file
       ansible.builtin.debug:
          msg: "Image URL list prepared at {{ url_list_file_path }} on host {{ inventory_hostname }}"
