@@ -65,25 +65,39 @@ DOWNLOAD_DIR_TEMPLATE = "/data/dask-worker-space/images/{image_id}.jpg"
 # --- Dask Actor to Hold the Model ---
 class ResNetModelActor:
     def __init__(self):
+        print("WORKER_DEBUG: Entering ResNetModelActor.__init__")
         actor_log = logging.getLogger('ResNetActor')
         actor_log.info("Initializing ResNetModelActor instance on worker...")
         self.model = None
         self.preprocess = None
         self.device = None
         try:
+            print("WORKER_DEBUG: Importing torch...")
             import torch
+            print("WORKER_DEBUG: Importing torchvision models...")
             import torchvision.models as models
+            print("WORKER_DEBUG: Importing torchvision transforms...")
             import torchvision.transforms as transforms
+            print("WORKER_DEBUG: Imports successful.")
+
             actor_log.info("Loading ResNet50 model into instance...")
+            print("WORKER_DEBUG: Loading ResNet50 weights...")
             weights = models.ResNet50_Weights.IMAGENET1K_V1
+            print("WORKER_DEBUG: Loading ResNet50 model structure...")
             self.model = models.resnet50(weights=weights)
+            print("WORKER_DEBUG: Setting device...")
             self.device = torch.device("cpu")
+            print("WORKER_DEBUG: Moving model to device...")
             self.model.to(self.device)
+            print("WORKER_DEBUG: Setting model to eval mode...")
             self.model.eval()
+            print("WORKER_DEBUG: Getting weights transforms...")
             self.preprocess = weights.transforms()
             actor_log.info(f"ResNet50 model loaded successfully into instance (Device: {self.device}).")
+            print("WORKER_DEBUG: __init__ successful.")
         except Exception as e:
             actor_log.error(f"Failed to load model or transforms in __init__: {e}", exc_info=True)
+            print(f"WORKER_CRITICAL: Exception in ResNetModelActor.__init__: {e}\n{traceback.format_exc()}", file=sys.stderr)
             raise
 
     def predict(self, image_bytes):
