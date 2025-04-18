@@ -1,4 +1,4 @@
-# Filename: prepare-test.yaml (URL Version with Ownership Fix - Corrected Order)
+# Filename: prepare-test.yaml (BLIP Version)
 - name: Prepare Host Node for Capacity Test
   hosts: hostnode
   become: true
@@ -8,7 +8,7 @@
     metadata_dir: "{{ base_dir }}/metadata"
     scripts_dir: "{{ base_dir }}/scripts"
     output_dir: "{{ base_dir }}/output"
-    target_user: almalinux # Define the user variable
+    target_user: almalinux
 
     url_list_file_name: "image_urls_to_process.txt"
     url_list_file_path: "{{ output_dir }}/{{ url_list_file_name }}"
@@ -23,7 +23,7 @@
     generator_script_remote_path: "{{ scripts_dir }}/generate_id_list.py"
 
     url_column_name: "url"
-    target_url_pool_count: 15000000
+    target_url_pool_count: 15000000 # Adjust if needed, generating URLs now
 
     runner_script_local_path: "./run_capacity_test.py"
     runner_script_remote_path: "{{ scripts_dir }}/run_capacity_test.py"
@@ -43,7 +43,7 @@
         - "{{ scripts_dir }}"
         - "{{ output_dir }}"
 
-    # 2. Download Parquet Files
+    # 2. Download Parquet Files (No change)
     - name: Download OpenImages Parquet files
       ansible.builtin.get_url:
         url: "{{ item.url }}"
@@ -58,7 +58,8 @@
       retries: 3
       delay: 5
 
-    # 3. Deploy Python Scripts
+
+    # 3. Deploy Python Scripts (No change)
     - name: Copy URL list generator script to host node
       ansible.builtin.copy:
         src: "{{ generator_script_local_path }}"
@@ -75,7 +76,8 @@
         owner: "{{ target_user }}"
         group: "{{ target_user }}"
 
-    # 4. Run Generator Script to Create URL Pool File
+
+    # 4. Run Generator Script to Create URL Pool File (No change)
     - name: Execute image URL list generator script
       ansible.builtin.command:
         cmd: >
@@ -89,37 +91,36 @@
       changed_when: script_execution.rc == 0 and "'Successfully wrote' in script_execution.stdout"
       failed_when: script_execution.rc != 0
 
-    # *** --- CORRECTED ORDER FOR VERIFICATION/OWNERSHIP --- ***
 
-    # 5. Verify output URL list file exists (using stat)
+    # 5. Verify output URL list file exists (No change)
     - name: Verify output URL list file exists
       ansible.builtin.stat:
         path: "{{ url_list_file_path }}"
-      register: output_file_stat # Register the result here
-      when: script_execution is succeeded # Only run stat if the command was successful
+      register: output_file_stat
+      when: script_execution is succeeded
 
-    # 6. Ensure final output file ownership is correct
+
+    # 6. Ensure final output file ownership is correct (No change)
     - name: Verify output URL list file ownership
       ansible.builtin.file:
         path: "{{ url_list_file_path }}"
         owner: "{{ target_user }}"
         group: "{{ target_user }}"
         mode: '0644'
-      # Condition now uses the registered variable correctly
       when: script_execution is succeeded and output_file_stat.stat.exists
 
-    # 7. Fail if URL list file was not created
+
+    # 7. Fail if URL list file was not created (No change)
     - name: Fail if URL list file was not created
       ansible.builtin.fail:
         msg: "Image URL list generation failed. Check script logs or run manually on host. stdout: {{ script_execution.stdout | default('N/A') }} stderr: {{ script_execution.stderr | default('N/A') }}"
-      # Condition now uses the registered variable correctly
       when:
         - script_execution is succeeded
         - not output_file_stat.stat.exists
 
-    # 8. Display path to generated URL list file
+
+    # 8. Display path to generated URL list file (No change)
     - name: Display path to generated URL list file
       ansible.builtin.debug:
          msg: "Image URL list prepared at {{ url_list_file_path }} on host {{ inventory_hostname }}"
-      # Condition now uses the registered variable correctly
       when: output_file_stat.stat.exists

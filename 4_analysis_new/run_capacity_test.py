@@ -1,4 +1,4 @@
-# Filename: run_capacity_test.py (Fix len() on as_completed)
+# Filename: run_capacity_test.py (BLIP Captioning - Model Load Per Task Version)
 import time
 import datetime
 import argparse
@@ -16,11 +16,9 @@ import traceback # For detailed error logging
 # Dask libraries
 from dask.distributed import Client, as_completed, Future, TimeoutError
 
-# PyTorch/Torchvision
+# Required ML Libraries (ensure installed on workers)
 import torch
-import torchvision
-import torchvision.models as models
-import torchvision.transforms as transforms
+from transformers import BlipProcessor, BlipForConditionalGeneration
 
 # --- Configuration ---
 DEFAULT_BASE_DIR = "/opt/comp0239_coursework"
@@ -32,7 +30,7 @@ DEFAULT_OUTPUT_FILE = os.path.join(DEFAULT_OUTPUT_DIR, DEFAULT_OUTPUT_FILE_NAME)
 DEFAULT_LOG_FILE_NAME = "capacity_test.log"
 DEFAULT_LOG_FILE = os.path.join(DEFAULT_OUTPUT_DIR, DEFAULT_LOG_FILE_NAME)
 DEFAULT_DURATION_HOURS = 24
-# DEFAULT_DURATION_HOURS = 0.1 # Use a SHORT duration for testing!
+# DEFAULT_DURATION_HOURS = 0.05 # Use a SHORT duration for testing!
 
 DEFAULT_SCHEDULER = '127.0.0.1:8786'
 
@@ -66,54 +64,69 @@ def extract_id_from_url(url):
 # --- Configuration specific to workers ---
 DOWNLOAD_DIR_TEMPLATE = "/data/dask-worker-space/images/{image_id}.jpg" # Cache location
 
-# --- Model Loading and Prediction Function (Runs on Worker) ---
-def load_and_predict(image_bytes):
-    """Loads model and predicts INSIDE the task function."""
-    print("WORKER_INFO: Entering load_and_predict")
+# --- Model Loading and Captioning Function (Runs on Worker) ---
+def load_blip_and_caption(image_bytes):
+    """Loads BLIP model and generates caption INSIDE the task function."""
+    # Using print for worker logs as logging setup is complex inside tasks
+    print("WORKER_INFO: Entering load_blip_and_caption")
+    model_name = "Salesforce/blip-image-captioning-base"
+    processor = None
+    model = None
     try:
-        print("WORKER_INFO: Importing torch/torchvision within task...")
+        print(f"WORKER_INFO: Importing transformers/torch/PIL within task...")
+        # Re-import necessary libraries within the task function scope
         import torch
-        import torchvision.models as models
-        import torchvision.transforms as transforms
+        from transformers import BlipProcessor, BlipForConditionalGeneration
         from PIL import Image
         import io
         print("WORKER_INFO: Imports successful inside task.")
 
-        print("WORKER_INFO: Loading model INSIDE task...")
-        weights = models.ResNet50_Weights.IMAGENET1K_V1
-        model = models.resnet50(weights=weights)
-        device = torch.device("cpu")
+        # 1. Load Processor and Model (per task - inefficient)
+        print(f"WORKER_INFO: Loading BLIP Processor: {model_name}")
+        processor = BlipProcessor.from_pretrained(model_name)
+        print(f"WORKER_INFO: Loading BLIP Model: {model_name}")
+        model = BlipForConditionalGeneration.from_pretrained(model_name)
+        device = torch.device("cpu") # Force CPU
         model.to(device)
-        model.eval()
-        preprocess = weights.transforms()
-        print("WORKER_INFO: Model loaded INSIDE task.")
+        model.eval() # Set to evaluation mode
+        print("WORKER_INFO: BLIP Processor and Model loaded successfully.")
 
-        print("WORKER_INFO: Preprocessing image...")
-        img = Image.open(io.BytesIO(image_bytes)).convert('RGB')
-        input_tensor = preprocess(img)
-        input_batch = input_tensor.unsqueeze(0)
-        input_batch = input_batch.to(device)
+        # 2. Prepare Image
+        print("WORKER_INFO: Preparing image...")
+        raw_image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
 
-        print("WORKER_INFO: Running inference...")
+        # 3. Process Image and Generate Caption
+        print("WORKER_INFO: Processing image with BlipProcessor...")
+        inputs = processor(raw_image, return_tensors="pt").to(device)
+
+        print("WORKER_INFO: Generating caption (max_length=50)...")
         with torch.no_grad():
-            output = model(input_batch)
+            # Adjust generation parameters if needed
+            out = model.generate(**inputs, max_length=50, num_beams=4)
 
-        probabilities = torch.nn.functional.softmax(output[0], dim=0)
-        top_prob, top_catid = torch.topk(probabilities, 1)
-        pred_idx = top_catid.item()
-        print("WORKER_INFO: Prediction successful INSIDE task.")
-        return f"PRED_IDX_{pred_idx}"
+        print("WORKER_INFO: Decoding caption...")
+        caption = processor.decode(out[0], skip_special_tokens=True)
+
+        print(f"WORKER_INFO: Caption generated successfully: '{caption}'")
+        # Clean up caption for CSV output
+        return caption.replace("\n", " ").replace(",", ";").strip() # Replace newline and comma
 
     except Exception as e:
-        print(f"WORKER_ERROR in load_and_predict: {e}\n{traceback.format_exc()}", file=sys.stderr)
-        return f"ERROR_TASK_FAILED_{e.__class__.__name__}"
+        print(f"WORKER_ERROR in load_blip_and_caption: {e}\n{traceback.format_exc()}", file=sys.stderr)
+        return f"ERROR_CAPTION_FAILED_{e.__class__.__name__}"
+    finally:
+         # Explicitly delete large objects to potentially help garbage collection
+         # This might slightly reduce memory pressure between tasks on a worker
+         del processor
+         del model
+         # No need for torch.cuda.empty_cache() on CPU
 
 
 # --- Image Processing Wrapper Function (Sent to Workers) ---
 def process_image(image_url):
     """
-    Downloads the image and calls the function to load the model and predict.
-    Returns tuple (image_id, prediction_result).
+    Downloads the image and calls the function to load BLIP and generate caption.
+    Returns tuple (image_id, caption_or_error).
     """
     t_start = time.time()
     image_url = image_url.strip()
@@ -131,18 +144,23 @@ def process_image(image_url):
         # 1. Download Image (with simple caching)
         if not os.path.exists(local_path):
             os.makedirs(local_dir, exist_ok=True)
-            response = requests.get(image_url, timeout=30)
+            # print(f"WORKER_INFO: Downloading {image_id} from {image_url}")
+            response = requests.get(image_url, timeout=60) # Increased timeout slightly
             response.raise_for_status()
             image_bytes = response.content
             with open(local_path, 'wb') as f:
                 f.write(image_bytes)
         else:
+            # print(f"WORKER_INFO: Using cached image for {image_id}")
             with open(local_path, 'rb') as f:
                 image_bytes = f.read()
 
-        # 2. Load model and predict by calling the other function
-        prediction_result = load_and_predict(image_bytes)
-        return (image_id, prediction_result)
+        # 2. Load BLIP model and generate caption
+        # print(f"WORKER_INFO: Calling load_blip_and_caption for {image_id}")
+        caption_result = load_blip_and_caption(image_bytes) # Call the new function
+
+        # print(f"WORKER_INFO: Finished processing {image_id}")
+        return (image_id, caption_result) # Return tuple (ID, Caption/Error)
 
     except HTTPError as http_err:
         status_code = http_err.response.status_code if http_err.response else 'UNKNOWN'
@@ -158,7 +176,7 @@ def process_image(image_url):
 
 # --- Main Control Logic ---
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run Dask Capacity Test (Model Load Per Task)")
+    parser = argparse.ArgumentParser(description="Run Dask Capacity Test (BLIP Captioning - Model Load Per Task)") # Updated title
     parser.add_argument("--scheduler", default=DEFAULT_SCHEDULER, help="Dask scheduler address")
     parser.add_argument("--urls", default=DEFAULT_URL_FILE, help="Path to image URL list file")
     parser.add_argument("--output", default=DEFAULT_OUTPUT_FILE, help="Path to output results CSV")
@@ -170,7 +188,7 @@ if __name__ == "__main__":
         log.warning(f"Log file argument ignored after setup. Logging to: {DEFAULT_LOG_FILE}")
 
     test_duration_seconds = args.duration * 3600
-    log.info(f"--- Starting Capacity Test (Model Load Per Task) ---")
+    log.info(f"--- Starting Capacity Test (BLIP Captioning - Model Load Per Task) ---") # Updated title
     log.info(f"Duration: {args.duration:.2f} hours ({test_duration_seconds:.0f} seconds)")
     log.info(f"Scheduler: {args.scheduler}")
     log.info(f"Image URL File: {args.urls}")
@@ -194,7 +212,7 @@ if __name__ == "__main__":
         log.info(f"Successfully connected to scheduler.")
         log.info(f"Dask dashboard link: {client.dashboard_link}")
         workers_info = client.scheduler_info()['workers']
-        num_workers = len(workers_info) # Store for calculation
+        num_workers = len(workers_info)
         log.info(f"Cluster workers found: {num_workers}")
         if not workers_info:
              log.error("No workers connected to the scheduler! Exiting.")
@@ -205,7 +223,7 @@ if __name__ == "__main__":
         with open(args.urls, 'r') as url_file, open(args.output, 'w') as outfile:
             log.info(f"Opened Image URL file: {args.urls}")
             log.info(f"Opened Output results file: {args.output}")
-            outfile.write("ImageID,Prediction\n")
+            outfile.write("ImageID,Caption\n") # Updated CSV header
 
             log.info("Starting task submission loop...")
             while time.time() < end_time:
@@ -229,14 +247,14 @@ if __name__ == "__main__":
 
                 processed_in_batch = 0
                 batch_start_time = time.time()
-                max_batch_process_time = 1.0
+                max_batch_process_time = 1.0 # Process results for max 1 second
 
                 for future in futures: # Iterate directly over as_completed
                     try:
                         if future.status == 'finished':
                            result = future.result(timeout=0.1)
                            if result and result[0] is not None:
-                                outfile.write(f"{result[0]},{result[1]}\n")
+                                outfile.write(f"{result[0]},{result[1]}\n") # Write ID, Caption/Error
                                 if "ERROR" in str(result[1]): error_count += 1
                                 results_count += 1
                                 processed_in_batch += 1
@@ -259,29 +277,28 @@ if __name__ == "__main__":
                 pending = submitted_count - results_count - error_count
 
                 # Log progress
-                if submitted_count % 5000 == 0 or processed_in_batch > 0:
+                if submitted_count % 1000 == 0 or processed_in_batch > 0: # Log slightly less often
                     elapsed_time = time.time() - start_time
                     rate = results_count / elapsed_time if elapsed_time > 0 else 0
                     log.info(f"Submitted: {submitted_count}, Results: {results_count} (Errors: {error_count}), "
                              f"Pending: {pending}, Rate: {rate:.2f} img/s, "
                              f"Elapsed: {elapsed_time/3600:.2f} hrs")
 
-                # Basic backpressure: slow down submission if too many tasks are pending
-                # --- CORRECTED BACKPRESSURE CHECK ---
-                if pending > (num_workers * 100): # Use calculated pending value
-                     sleep_time = 0.1 + (pending / (num_workers * 1000))
+                # Basic backpressure
+                if pending > (num_workers * 50): # Adjust threshold maybe lower for heavier tasks
+                     sleep_time = 0.1 + (pending / (num_workers * 500))
                      log.debug(f"Backpressure active: {pending} pending tasks. Sleeping for {sleep_time:.2f}s")
-                     time.sleep(min(sleep_time, 2.0)) # Max 2s sleep
+                     time.sleep(min(sleep_time, 3.0)) # Allow slightly longer sleep
 
 
             log.info("Test duration reached or Image URL file ended. Stopping submission.")
 
             # --- Final Result Collection ---
-            remaining_tasks = submitted_count - results_count - error_count # Use calculation
+            remaining_tasks = submitted_count - results_count - error_count
             log.info(f"Waiting for {remaining_tasks} remaining tasks...")
-            for future in futures: # Iterate over remaining futures in the set
+            for future in futures:
                 try:
-                    result = future.result(timeout=300)
+                    result = future.result(timeout=600) # Longer timeout for potentially slow final captions
                     if result and result[0] is not None:
                         outfile.write(f"{result[0]},{result[1]}\n")
                         if "ERROR" in str(result[1]): error_count += 1
@@ -293,9 +310,7 @@ if __name__ == "__main__":
                 except Exception as e:
                     log.error(f"Failed to retrieve result for {future.key} during final wait: {e}", exc_info=True); error_count += 1
 
-                # This counter isn't strictly accurate anymore as we don't know exact remaining count
-                # but can still log progress
-                if (results_count + error_count) % 1000 == 0:
+                if (results_count + error_count) % 500 == 0: # Log progress less often
                      current_pending = submitted_count - results_count - error_count
                      if current_pending > 0:
                          log.info(f"Approx {current_pending} tasks remaining...")
@@ -318,6 +333,7 @@ if __name__ == "__main__":
         log.info(f"Results Collected: {results_count}")
         log.info(f"Errors Reported: {error_count}")
         if actual_duration > 0:
+             # Ensure results_count is used for throughput calculation
              throughput = results_count / actual_duration
              log.info(f"Average Throughput: {throughput:.2f} images/sec ({throughput * 3600:.0f} images/hour)")
         log.info(f"Results saved to: {args.output}")
