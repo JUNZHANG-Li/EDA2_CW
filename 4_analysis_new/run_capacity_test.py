@@ -63,7 +63,6 @@ def extract_id_from_url(url):
 DOWNLOAD_DIR_TEMPLATE = "/data/dask-worker-space/images/{image_id}.jpg"
 
 # --- Dask Actor to Hold the Model ---
-# (ResNetModelActor remains the same as the Instance Variable Version)
 class ResNetModelActor:
     def __init__(self):
         actor_log = logging.getLogger('ResNetActor')
@@ -89,26 +88,52 @@ class ResNetModelActor:
 
     def predict(self, image_bytes):
         predict_log = logging.getLogger('ResNetActor.predict')
-        if self.model is None or self.preprocess is None or self.device is None:
-             predict_log.error("Model/preprocess/device not initialized in this instance!")
-             return "ERROR_MODEL_NOT_LOADED"
+        # --- ADDED DETAIL LOGGING ---
+        predict_log.info("Inside predict method")
+        if self.model is None: predict_log.error("self.model is None!"); return "ERROR_MODEL_NOT_LOADED"
+        if self.preprocess is None: predict_log.error("self.preprocess is None!"); return "ERROR_MODEL_NOT_LOADED"
+        if self.device is None: predict_log.error("self.device is None!"); return "ERROR_MODEL_NOT_LOADED"
+        predict_log.info("Model, preprocess, and device seem initialized.")
+
         try:
             import torch
+            predict_log.info("Opening image...")
             img = Image.open(io.BytesIO(image_bytes)).convert('RGB')
-            input_tensor = self.preprocess(img)
-            input_batch = input_tensor.unsqueeze(0)
-            input_batch = input_batch.to(self.device)
+
+            predict_log.info("Preprocessing image...")
+            input_tensor = self.preprocess(img) # <<< Potential fail point 1
+
+            predict_log.info("Unsqueezing tensor...")
+            input_batch = input_tensor.unsqueeze(0) # <<< Potential fail point 2
+
+            predict_log.info(f"Moving tensor to device: {self.device}...")
+            input_batch = input_batch.to(self.device) # <<< Potential fail point 3
+
+            predict_log.info("Running inference...")
             with torch.no_grad():
-                output = self.model(input_batch)
-            probabilities = torch.nn.functional.softmax(output[0], dim=0)
-            top_prob, top_catid = torch.topk(probabilities, 1)
-            return f"PRED_IDX_{top_catid.item()}"
-        except AttributeError as ae: # Catch AttributeError specifically
+                output = self.model(input_batch) # <<< Potential fail point 4
+
+            predict_log.info("Calculating probabilities...")
+            probabilities = torch.nn.functional.softmax(output[0], dim=0) # <<< Potential fail point 5
+
+            predict_log.info("Getting top prediction...")
+            top_prob, top_catid = torch.topk(probabilities, 1) # <<< Potential fail point 6
+
+            predict_log.info("Getting item index...")
+            pred_idx = top_catid.item() # <<< Potential fail point 7
+
+            predict_log.info("Prediction successful.")
+            return f"PRED_IDX_{pred_idx}"
+
+        except AttributeError as ae:
+             # Log the exception with traceback details *on the worker*
              predict_log.error(f"AttributeError during prediction: {ae}", exc_info=True)
-             # You could try adding more details from ae if useful
-             return f"ERROR_PREDICT_ATTR_{ae.__class__.__name__}" # More specific error
+             # Also print to worker stdout/stderr for easier visibility if journalctl is hard
+             print(f"WORKER_ERROR: AttributeError in predict: {ae}\n{traceback.format_exc()}", file=sys.stderr)
+             return f"ERROR_PREDICT_ATTR_{ae.__class__.__name__}" # Return specific error
         except Exception as e:
-            predict_log.error(f"Error during prediction: {e}", exc_info=True)
+            predict_log.error(f"General error during prediction: {e}", exc_info=True)
+            print(f"WORKER_ERROR: General error in predict: {e}\n{traceback.format_exc()}", file=sys.stderr)
             return f"ERROR_PREDICT_{e.__class__.__name__}"
 
 
