@@ -1,4 +1,4 @@
-# Filename: prepare-test.yaml (BLIP Version)
+# Filename: prepare-test.yaml (BLIP Version - Fixed Download Loop)
 - name: Prepare Host Node for Capacity Test
   hosts: hostnode
   become: true
@@ -43,40 +43,22 @@
         - "{{ scripts_dir }}"
         - "{{ output_dir }}"
 
-    # 2. Download Parquet Files (with pre-check)
-    - name: Check for existing Parquet file and download if missing
-      vars:
-        # Define the destination path within the task's scope for clarity
-        parquet_dest_path: "{{ metadata_dir }}/{{ item.filename }}"
-      block:
-        - name: Check if Parquet file exists | {{ item.filename }}
-          ansible.builtin.stat:
-            path: "{{ parquet_dest_path }}"
-          register: parquet_stat_result
-
-        - name: Download Parquet file if it does not exist | {{ item.filename }}
-          ansible.builtin.get_url:
-            url: "{{ item.url }}"
-            dest: "{{ parquet_dest_path }}"
-            mode: '0644'
-            owner: "{{ target_user }}"
-            group: "{{ target_user }}"
-            force: no
-          when: not parquet_stat_result.stat.exists
-          register: download_results
-          until: download_results is succeeded
-          retries: 20
-          delay: 5
-
-        - name: Report status | {{ item.filename }}
-          ansible.builtin.debug:
-            msg: "{{ item.filename }} already exists."
-          when: parquet_stat_result.stat.exists
-
-      # Loop over the block for each file URL
+    # 2. Download Parquet Files (Simplified - Rely on get_url idempotency)
+    - name: Download OpenImages Parquet files (if needed) | {{ item.filename }}
+      ansible.builtin.get_url:
+        url: "{{ item.url }}"
+        dest: "{{ metadata_dir }}/{{ item.filename }}"
+        mode: '0644'
+        owner: "{{ target_user }}"
+        group: "{{ target_user }}"
+        force: no # This ensures download only happens if file is missing or different
       loop: "{{ parquet_file_urls }}"
       loop_control:
         label: "{{ item.filename }}" # Makes Ansible output clearer
+      register: download_status # Register result (will show skipped if file exists)
+      until: download_status is succeeded # Retry only if download attempt fails
+      retries: 20 # Increased retries for potentially large files
+      delay: 10 # Increased delay between retries
 
     # 3. Deploy Python Scripts
     - name: Copy URL list generator script to host node
@@ -96,7 +78,7 @@
         group: "{{ target_user }}"
 
 
-    # 4. Run Generator Script to Create URL Pool Filefiles
+    # 4. Run Generator Script to Create URL Pool File
     - name: Execute image URL list generator script
       ansible.builtin.command:
         cmd: >
@@ -105,41 +87,46 @@
           --url-col {{ url_column_name }}
           --output {{ url_list_file_path }}
           --count {{ target_url_pool_count }}
-        creates: "{{ url_list_file_path }}"
+        creates: "{{ url_list_file_path }}" # Skips if output file exists
       register: script_execution
       changed_when: script_execution.rc == 0 and "'Successfully wrote' in script_execution.stdout"
       failed_when: script_execution.rc != 0
 
 
-    # 5. Verify output URL list file existsfiles
+    # 5. Verify output URL list file exists
     - name: Verify output URL list file exists
       ansible.builtin.stat:
         path: "{{ url_list_file_path }}"
       register: output_file_stat
-      when: script_execution is succeeded
+      # Check status only if the command module *would* have run (i.e., file didn't exist initially)
+      # or if it reports changed (meaning it ran and succeeded)
+      when: script_execution.skipped is not defined or script_execution.changed
 
 
-    # 6. Ensure final output file ownership is correctfiles
+    # 6. Ensure final output file ownership is correct
     - name: Verify output URL list file ownership
       ansible.builtin.file:
         path: "{{ url_list_file_path }}"
         owner: "{{ target_user }}"
         group: "{{ target_user }}"
         mode: '0644'
-      when: script_execution is succeeded and output_file_stat.stat.exists
+      # Run only if stat check passed (meaning file exists now)
+      when: output_file_stat.stat is defined and output_file_stat.stat.exists
 
 
-    # 7. Fail if URL list file was not createdfiles
+    # 7. Fail if URL list file was not created
     - name: Fail if URL list file was not created
       ansible.builtin.fail:
         msg: "Image URL list generation failed. Check script logs or run manually on host. stdout: {{ script_execution.stdout | default('N/A') }} stderr: {{ script_execution.stderr | default('N/A') }}"
+      # Fail if the script would have run (or changed) AND the stat check says the file doesn't exist
       when:
-        - script_execution is succeeded
-        - not output_file_stat.stat.exists
+        - (script_execution.skipped is not defined or script_execution.changed)
+        - output_file_stat.stat is not defined or not output_file_stat.stat.exists
 
 
-    # 8. Display path to generated URL list filefiles
+    # 8. Display path to generated URL list file
     - name: Display path to generated URL list file
       ansible.builtin.debug:
          msg: "Image URL list prepared at {{ url_list_file_path }} on host {{ inventory_hostname }}"
-      when: output_file_stat.stat.exists
+      # Display only if stat check passed
+      when: output_file_stat.stat is defined and output_file_stat.stat.exists
