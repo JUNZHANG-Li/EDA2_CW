@@ -43,27 +43,13 @@
         - "{{ scripts_dir }}"
         - "{{ output_dir }}"
 
-    - name: Install OS dependencies (wget, python3-pip)
+    - name: Install OS dependencies
       ansible.builtin.package:
         name:
           - wget
           - python3-pip
         state: present
         update_cache: yes
-
-    - name: Install Python dependencies for scripts
-      ansible.builtin.pip:
-        name:
-          - pandas>=1.0
-          - pyarrow>=10.0
-          - requests>=2.0
-          - dask>=2023.0
-          - distributed>=2023.0
-          - Pillow>=9.0
-          - torch
-          - torchvision
-        state: present
-        executable: pip3
 
     # 2. Download Parquet Files
     - name: Download OpenImages Parquet files
