@@ -63,50 +63,59 @@ def extract_id_from_url(url):
 # Path uses worker's data disk and extracted ID
 DOWNLOAD_DIR_TEMPLATE = "/data/dask-worker-space/images/{image_id}.jpg"
 
-# --- Dask Actor to Hold the Model (No change needed here) ---
 class ResNetModelActor:
-    _model = None
-    _preprocess = None
-    _device = None
 
     def __init__(self):
         actor_log = logging.getLogger('ResNetActor')
-        if ResNetModelActor._model is None:
-            actor_log.info("Initializing ResNetModelActor on worker...")
-            try:
-                import torch
-                import torchvision.models as models
-                import torchvision.transforms as transforms
-                actor_log.info("Loading ResNet50 model...")
-                weights = models.ResNet50_Weights.IMAGENET1K_V1
-                ResNetModelActor._model = models.resnet50(weights=weights)
-                ResNetModelActor._device = torch.device("cpu")
-                ResNetModelActor._model.to(ResNetModelActor._device)
-                ResNetModelActor._model.eval()
-                ResNetModelActor._preprocess = weights.transforms()
-                actor_log.info(f"ResNet50 model loaded successfully on worker (Device: {ResNetModelActor._device}).")
-            except Exception as e:
-                actor_log.error(f"Failed to load model or transforms on worker: {e}", exc_info=True)
-                raise
-        else:
-             actor_log.info("ResNetModelActor already initialized on this worker.")
-
-    def predict(self, image_bytes):
-        predict_log = logging.getLogger('ResNetActor.predict')
-        if self._model is None or self._preprocess is None or self._device is None:
-             predict_log.error("Model/preprocess/device not initialized!")
-             return "ERROR_MODEL_NOT_LOADED"
+        actor_log.info("Initializing ResNetModelActor instance on worker...")
+        self.model = None
+        self.preprocess = None
+        self.device = None
         try:
             import torch
+            import torchvision.models as models
+            import torchvision.transforms as transforms
+
+            actor_log.info("Loading ResNet50 model into instance...")
+            weights = models.ResNet50_Weights.IMAGENET1K_V1
+            # Assign to instance variables
+            self.model = models.resnet50(weights=weights)
+            self.device = torch.device("cpu")
+            self.model.to(self.device)
+            self.model.eval()
+            self.preprocess = weights.transforms()
+
+            actor_log.info(f"ResNet50 model loaded successfully into instance (Device: {self.device}).")
+        except Exception as e:
+            actor_log.error(f"Failed to load model or transforms in __init__: {e}", exc_info=True)
+            # If init fails, the actor might still be created but unusable.
+            # Prediction method will check for None.
+            raise # Reraise to potentially signal actor creation failure earlier
+
+    def predict(self, image_bytes):
+        """Performs preprocessing and inference on image bytes."""
+        predict_log = logging.getLogger('ResNetActor.predict')
+        # Check instance variables
+        if self.model is None or self.preprocess is None or self.device is None:
+             predict_log.error("Model/preprocess/device not initialized in this instance!")
+             return "ERROR_MODEL_NOT_LOADED"
+
+        try:
+            import torch # Ensure torch is available in this method context
+
             img = Image.open(io.BytesIO(image_bytes)).convert('RGB')
-            input_tensor = self._preprocess(img)
+            input_tensor = self.preprocess(img) # Use self.preprocess
             input_batch = input_tensor.unsqueeze(0)
-            input_batch = input_batch.to(self._device)
+            input_batch = input_batch.to(self.device) # Use self.device
+
             with torch.no_grad():
-                output = self._model(input_batch)
+                output = self.model(input_batch) # Use self.model
+
             probabilities = torch.nn.functional.softmax(output[0], dim=0)
             top_prob, top_catid = torch.topk(probabilities, 1)
+
             return f"PRED_IDX_{top_catid.item()}"
+
         except Exception as e:
             predict_log.error(f"Error during prediction: {e}", exc_info=True)
             return "ERROR_PREDICTION_FAILED"

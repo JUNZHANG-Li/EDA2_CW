@@ -29,7 +29,7 @@
   hosts: workers
   become: true
   vars:
-    worker_data_mount_point: /data # Match the mount point from your disk setup
+    worker_data_mount_point: /data
     preload_script_local_path: "./files/preload_torch.py"
     preload_script_remote_path: "/opt/comp0239_coursework/scripts/preload_torch.py"
     target_user: almalinux
@@ -47,7 +47,7 @@
       ansible.builtin.copy:
         src: "{{ preload_script_local_path }}"
         dest: "{{ preload_script_remote_path }}"
-        mode: '0644'
+        mode: '0755'
         owner: "{{ target_user }}"
         group: "{{ target_user }}"
 
