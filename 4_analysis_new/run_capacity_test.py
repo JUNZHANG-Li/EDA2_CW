@@ -1,4 +1,4 @@
-# Filename: run_capacity_test.py (URL Version - Fixed TimeoutError & discard)
+# Filename: run_capacity_test.py (Fix len() and Add Error Detail)
 import time
 import datetime
 import argparse
@@ -6,19 +6,21 @@ import logging
 import os
 import random
 import requests # For image download
+# --- FIX: Import specific requests exception ---
+from requests.exceptions import HTTPError
 from PIL import Image # For image loading
 import io # For handling image bytes
 import sys
 import re # Import regex for ID extraction
+import traceback # For detailed error logging
 
 # Dask libraries
-# --- FIX: Import TimeoutError explicitly ---
 from dask.distributed import Client, as_completed, Actor, Future, TimeoutError
 
 # --- Configuration ---
 DEFAULT_BASE_DIR = "/opt/comp0239_coursework"
 DEFAULT_OUTPUT_DIR = os.path.join(DEFAULT_BASE_DIR, "output")
-DEFAULT_ID_FILE_NAME = "image_urls_to_process.txt" # Name is legacy, file now contains URLs
+DEFAULT_ID_FILE_NAME = "image_urls_to_process.txt"
 DEFAULT_URL_FILE = os.path.join(DEFAULT_OUTPUT_DIR, DEFAULT_ID_FILE_NAME)
 DEFAULT_OUTPUT_FILE_NAME = "capacity_test_results.csv"
 DEFAULT_OUTPUT_FILE = os.path.join(DEFAULT_OUTPUT_DIR, DEFAULT_OUTPUT_FILE_NAME)
@@ -30,6 +32,7 @@ DEFAULT_DURATION_HOURS = 24
 DEFAULT_SCHEDULER = '127.0.0.1:8786'
 
 # --- Logging Setup ---
+# (Logging setup remains the same)
 os.makedirs(DEFAULT_OUTPUT_DIR, exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
@@ -43,25 +46,24 @@ log = logging.getLogger('CapacityTestRunner')
 dask_log = logging.getLogger('distributed')
 dask_log.setLevel(logging.WARNING)
 
+
 # --- Helper Function ---
+# (extract_id_from_url remains the same)
 def extract_id_from_url(url):
-    """Extracts the image ID (filename without extension) from the URL."""
-    if not isinstance(url, str):
-        return None
+    if not isinstance(url, str): return None
     try:
         match = re.search(r'/([^/]+)\.(jpg|jpeg|png|gif)$', url, re.IGNORECASE)
-        if match:
-            return match.group(1)
+        if match: return match.group(1)
         else:
             filename = url.split('/')[-1]
             return filename.split('.')[0] if '.' in filename else filename
-    except Exception:
-        return None
+    except Exception: return None
 
 # --- Configuration specific to workers ---
 DOWNLOAD_DIR_TEMPLATE = "/data/dask-worker-space/images/{image_id}.jpg"
 
-# --- Dask Actor to Hold the Model (Instance Variable Version) ---
+# --- Dask Actor to Hold the Model ---
+# (ResNetModelActor remains the same as the Instance Variable Version)
 class ResNetModelActor:
     def __init__(self):
         actor_log = logging.getLogger('ResNetActor')
@@ -101,17 +103,19 @@ class ResNetModelActor:
             probabilities = torch.nn.functional.softmax(output[0], dim=0)
             top_prob, top_catid = torch.topk(probabilities, 1)
             return f"PRED_IDX_{top_catid.item()}"
+        except AttributeError as ae: # Catch AttributeError specifically
+             predict_log.error(f"AttributeError during prediction: {ae}", exc_info=True)
+             # You could try adding more details from ae if useful
+             return f"ERROR_PREDICT_ATTR_{ae.__class__.__name__}" # More specific error
         except Exception as e:
             predict_log.error(f"Error during prediction: {e}", exc_info=True)
-            return "ERROR_PREDICTION_FAILED"
+            return f"ERROR_PREDICT_{e.__class__.__name__}"
 
 
 # --- Image Processing Function (Sent to Workers) ---
 def process_image(image_url, model_actor_future):
     """
-    Performs download (using full URL), preprocessing, and inference for a single image.
-    Extracts ID for local caching and result reporting.
-    Uses the ResNetModelActor for inference.
+    Performs download, preprocessing, and inference for a single image.
     """
     t_start = time.time()
     image_url = image_url.strip()
@@ -129,7 +133,7 @@ def process_image(image_url, model_actor_future):
         if not os.path.exists(local_path):
             os.makedirs(local_dir, exist_ok=True)
             response = requests.get(image_url, timeout=30)
-            response.raise_for_status()
+            response.raise_for_status() # Raises HTTPError for bad responses (4xx or 5xx)
             image_bytes = response.content
             with open(local_path, 'wb') as f:
                 f.write(image_bytes)
@@ -138,19 +142,33 @@ def process_image(image_url, model_actor_future):
                 image_bytes = f.read()
 
         # 2. Inference using the Model Actor
-        model_actor = model_actor_future.result(timeout=60)
+        # Use a longer timeout when getting the actor the first time on a worker
+        model_actor = model_actor_future.result(timeout=120) # Increased timeout
         prediction = model_actor.predict(image_bytes)
 
         return (image_id, prediction)
 
-    except requests.exceptions.RequestException as e:
-        return (image_id, f"ERROR_DOWNLOAD_{e.__class__.__name__}")
+    except HTTPError as http_err: # Catch HTTPError specifically
+        # Log the status code if available
+        status_code = http_err.response.status_code if http_err.response else 'UNKNOWN'
+        # print(f"Worker WARN: Download failed for {image_id} from {image_url}: HTTP {status_code}")
+        return (image_id, f"ERROR_DOWNLOAD_HTTP_{status_code}")
+    except requests.exceptions.RequestException as req_err: # Catch other request errors
+        # print(f"Worker WARN: Download failed for {image_id} from {image_url}: {req_err}")
+        return (image_id, f"ERROR_DOWNLOAD_{req_err.__class__.__name__}")
+    except AttributeError as ae: # Catch AttributeError during processing specifically
+         # print(f"Worker ERROR: AttributeError during processing for {image_id}: {ae}")
+         # traceback.print_exc() # Optionally print stack trace to worker log
+         return (image_id, f"ERROR_PROCESSING_{ae.__class__.__name__}") # Keep original error format
     except Exception as e:
+        # print(f"Worker ERROR: Processing failed for {image_id}: {e}")
+        # traceback.print_exc()
         return (image_id, f"ERROR_PROCESSING_{e.__class__.__name__}")
 
 
 # --- Main Control Logic ---
 if __name__ == "__main__":
+    # (Argument parsing and initial setup remains the same)
     parser = argparse.ArgumentParser(description="Run Dask Capacity Test for Image Classification using URLs")
     parser.add_argument("--scheduler", default=DEFAULT_SCHEDULER, help="Dask scheduler address")
     parser.add_argument("--urls", default=DEFAULT_URL_FILE, help="Path to image URL list file")
@@ -159,8 +177,7 @@ if __name__ == "__main__":
     parser.add_argument("--duration", type=float, default=DEFAULT_DURATION_HOURS, help="Test duration in hours")
     args = parser.parse_args()
 
-    if args.log != DEFAULT_LOG_FILE:
-        log.warning(f"Log file argument provided, but changing path after init is complex. Logging to: {DEFAULT_LOG_FILE}")
+    if args.log != DEFAULT_LOG_FILE: log.warning(f"Logging to: {DEFAULT_LOG_FILE}")
 
     test_duration_seconds = args.duration * 3600
     log.info(f"--- Starting Capacity Test ---")
@@ -182,6 +199,7 @@ if __name__ == "__main__":
     client = None
 
     try:
+        # (Client connection and Actor deployment remain the same)
         log.info("Connecting to Dask scheduler...")
         client = Client(args.scheduler, timeout="60s", heartbeat_interval='15s')
         log.info(f"Successfully connected to scheduler.")
@@ -194,7 +212,7 @@ if __name__ == "__main__":
 
         log.info("Deploying ResNetModelActor to each worker...")
         model_actor_future = client.submit(ResNetModelActor, actor=True)
-        model_actor_future.result(timeout=30)
+        model_actor_future.result(timeout=30) # Check if actor *future* is ready
         log.info("Model actor deployment task submitted/ready.")
 
         futures = as_completed()
@@ -206,6 +224,7 @@ if __name__ == "__main__":
 
             log.info("Starting task submission loop...")
             while time.time() < end_time:
+                # (Submission loop remains the same)
                 submit_batch_size = 500
                 current_batch = 0
                 while current_batch < submit_batch_size and time.time() < end_time:
@@ -213,94 +232,80 @@ if __name__ == "__main__":
                         image_url = next(url_file).strip()
                         if image_url:
                             future = client.submit(process_image, image_url, model_actor_future, pure=False)
-                            futures.add(future) # Add submitted future to the as_completed set
+                            futures.add(future)
                             submitted_count += 1
                             current_batch += 1
                     except StopIteration:
                         log.warning("Reached end of Image URL file before duration ended.")
-                        end_time = time.time()
-                        break
+                        end_time = time.time(); break
                     except Exception as e:
-                         log.error(f"Error reading URL file or submitting task: {e}", exc_info=True)
-                         time.sleep(1)
+                         log.error(f"Error reading URL file or submitting task: {e}", exc_info=True); time.sleep(1)
 
                 if current_batch == 0 and time.time() >= end_time: break
 
                 processed_in_batch = 0
                 # Iterate directly over the as_completed object
-                # This yields futures as they complete. The loop might process 0 to many futures.
                 for future in futures:
                     try:
-                        # Check status before calling result
                         if future.status == 'finished':
-                            result = future.result(timeout=1) # Short timeout ok
+                            result = future.result(timeout=1)
                             if result and result[0] is not None:
                                 outfile.write(f"{result[0]},{result[1]}\n")
                                 if "ERROR" in str(result[1]): error_count += 1
                                 results_count += 1
                                 processed_in_batch += 1
                             elif result and result[0] is None:
-                                 log.warning(f"Task returned None ID with result: {result[1]}")
-                                 error_count += 1
-                            # *** FIX: Removed futures.discard ***
+                                 log.warning(f"Task returned None ID with result: {result[1]}"); error_count += 1
+                            # Removed discard
 
                         elif future.status == 'error':
-                           log.error(f"Task {future.key} failed with exception: {future.exception()}")
-                           error_count +=1
-                           # *** FIX: Removed futures.discard ***
+                           log.error(f"Task {future.key} failed with exception: {future.exception()}"); error_count +=1
+                           # Removed discard
 
-                        # Optional: Limit processing in one go to keep submitting
-                        if processed_in_batch > 1000:
-                            break # Exit inner loop to potentially submit more
+                        if processed_in_batch > 1000: break # Optional limit
 
-                    # --- FIX: Catch dask.distributed.TimeoutError ---
                     except TimeoutError:
                          log.warning(f"Timeout getting result from future {future.key}. Will retry later.")
-                         # Do not discard, loop will eventually yield it again
                     except Exception as e:
-                        log.error(f"Failed to retrieve result for {future.key}: {e}", exc_info=True)
-                        error_count += 1
-                        # *** FIX: Removed futures.discard ***
+                        log.error(f"Failed to retrieve result for {future.key}: {e}", exc_info=True); error_count += 1
+                        # Removed discard
 
                 # Log progress
                 if submitted_count % 5000 == 0 or processed_in_batch > 0:
                     elapsed_time = time.time() - start_time
                     rate = results_count / elapsed_time if elapsed_time > 0 else 0
-                    # Use len(futures) to get accurate pending count from as_completed object
-                    pending = len(futures)
+                    # --- FIX: Correct pending count ---
+                    pending = submitted_count - results_count - error_count
                     log.info(f"Submitted: {submitted_count}, Results: {results_count} (Errors: {error_count}), "
                              f"Pending: {pending}, Rate: {rate:.2f} img/s, "
                              f"Elapsed: {elapsed_time/3600:.2f} hrs")
 
                 # Basic backpressure
-                if len(futures) > (len(workers_info) * 100):
-                     sleep_time = 0.1 + (len(futures) / (len(workers_info) * 1000))
-                     time.sleep(min(sleep_time, 2.0))
+                if pending > (len(workers_info) * 100): # Check pending calculated above
+                     sleep_time = 0.1 + (pending / (len(workers_info) * 1000)) # Dynamic sleep
+                     time.sleep(min(sleep_time, 2.0)) # Max 2s sleep
 
 
             log.info("Test duration reached or Image URL file ended. Stopping submission.")
 
             # --- Final Result Collection ---
-            remaining_tasks = len(futures)
+            # Use calculated pending instead of len(futures)
+            remaining_tasks = submitted_count - results_count - error_count
             log.info(f"Waiting for {remaining_tasks} remaining tasks...")
             # Iterate directly over remaining futures
             for future in futures:
                 try:
-                    result = future.result(timeout=300) # Longer timeout
+                    result = future.result(timeout=300)
                     if result and result[0] is not None:
                         outfile.write(f"{result[0]},{result[1]}\n")
                         if "ERROR" in str(result[1]): error_count += 1
                         results_count += 1
                     elif result and result[0] is None:
-                         log.warning(f"Task returned None ID during final wait: {result[1]}")
-                         error_count += 1
-                # --- FIX: Catch dask.distributed.TimeoutError ---
+                         log.warning(f"Task returned None ID during final wait: {result[1]}"); error_count += 1
                 except TimeoutError:
-                     log.error(f"Timeout waiting for final task result for {future.key}.")
-                     error_count += 1
+                     log.error(f"Timeout waiting for final task result for {future.key}."); error_count += 1
                 except Exception as e:
-                    log.error(f"Failed to retrieve result for {future.key} during final wait: {e}", exc_info=True)
-                    error_count += 1
+                    log.error(f"Failed to retrieve result for {future.key} during final wait: {e}", exc_info=True); error_count += 1
 
                 remaining_tasks -= 1
                 if remaining_tasks % 1000 == 0 and remaining_tasks > 0:
@@ -311,13 +316,12 @@ if __name__ == "__main__":
     except Exception as e:
         log.critical(f"A critical error occurred: {e}", exc_info=True)
     finally:
+        # (Client closing and final summary remain the same)
         if client:
             log.info("Closing Dask client connection...")
             try:
-                 if 'model_actor_future' in locals() and model_actor_future.done():
-                      pass
-            except Exception as actor_err:
-                 log.warning(f"Error during actor cleanup: {actor_err}")
+                 if 'model_actor_future' in locals() and model_actor_future.done(): pass
+            except Exception as actor_err: log.warning(f"Error during actor cleanup: {actor_err}")
             client.close()
             log.info("Dask client closed.")
 
