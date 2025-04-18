@@ -1,4 +1,4 @@
-# Filename: run_capacity_test.py (Model Load Per Task Version)
+# Filename: run_capacity_test.py (Model Load Per Task Version - Fixed Result Loop)
 import time
 import datetime
 import argparse
@@ -16,8 +16,7 @@ import traceback # For detailed error logging
 # Dask libraries
 from dask.distributed import Client, as_completed, Future, TimeoutError
 
-# PyTorch/Torchvision - Needed in main scope for type hints / checks potentially
-# but primarily used within the task function now.
+# PyTorch/Torchvision - Primarily used within the task function now.
 import torch
 import torchvision
 import torchvision.models as models
@@ -138,7 +137,6 @@ def process_image(image_url):
         # 1. Download Image (with simple caching)
         if not os.path.exists(local_path):
             # Ensure directory exists (needed if first time for this worker)
-            # Use os.makedirs for robustness, although dask might create worker dir
             os.makedirs(local_dir, exist_ok=True)
             # print(f"WORKER_INFO: Downloading {image_id} from {image_url}")
             response = requests.get(image_url, timeout=30)
@@ -183,7 +181,6 @@ if __name__ == "__main__":
 
     # --- Update logging file path ---
     if args.log != DEFAULT_LOG_FILE:
-        # This still won't change the already configured handler easily.
         log.warning(f"Log file argument ignored after setup. Logging to: {DEFAULT_LOG_FILE}")
 
     test_duration_seconds = args.duration * 3600
@@ -192,7 +189,7 @@ if __name__ == "__main__":
     log.info(f"Scheduler: {args.scheduler}")
     log.info(f"Image URL File: {args.urls}")
     log.info(f"Output Results File: {args.output}")
-    log.info(f"Log File: {args.log}") # Log the actual log file path
+    log.info(f"Log File: {args.log}")
 
     if not os.path.exists(args.urls):
         log.error(f"Image URL file not found: {args.urls}")
@@ -207,126 +204,126 @@ if __name__ == "__main__":
 
     try:
         log.info("Connecting to Dask scheduler...")
-        # Increase connection timeout slightly if needed
         client = Client(args.scheduler, timeout="90s", heartbeat_interval='15s')
         log.info(f"Successfully connected to scheduler.")
         log.info(f"Dask dashboard link: {client.dashboard_link}")
-        # Get worker info early for backpressure logic
         workers_info = client.scheduler_info()['workers']
         log.info(f"Cluster workers found: {len(workers_info)}")
         if not workers_info:
              log.error("No workers connected to the scheduler! Exiting.")
              sys.exit(1)
-        num_workers = len(workers_info) # Store for calculation
+        num_workers = len(workers_info)
 
-        # --- REMOVED Actor Deployment ---
+        # --- Actor Deployment is Removed ---
 
-        # Use as_completed for efficient result gathering
         futures = as_completed()
 
         with open(args.urls, 'r') as url_file, open(args.output, 'w') as outfile:
             log.info(f"Opened Image URL file: {args.urls}")
             log.info(f"Opened Output results file: {args.output}")
-            outfile.write("ImageID,Prediction\n") # CSV header
+            outfile.write("ImageID,Prediction\n")
 
             log.info("Starting task submission loop...")
             while time.time() < end_time:
-                submit_batch_size = 500 # Submit tasks in reasonable batches
+                submit_batch_size = 500
                 current_batch = 0
                 while current_batch < submit_batch_size and time.time() < end_time:
                     try:
                         image_url = next(url_file).strip()
                         if image_url:
-                            # Submit the process_image function (which handles download and prediction)
                             future = client.submit(process_image, image_url, pure=False)
                             futures.add(future)
                             submitted_count += 1
                             current_batch += 1
                     except StopIteration:
                         log.warning("Reached end of Image URL file before duration ended.")
-                        end_time = time.time() # Stop test now
-                        break # Exit inner submission loop
+                        end_time = time.time(); break
                     except Exception as e:
-                         log.error(f"Error reading URL file or submitting task: {e}", exc_info=True)
-                         # Avoid tight loop on file errors
-                         time.sleep(1)
+                         log.error(f"Error reading URL file or submitting task: {e}", exc_info=True); time.sleep(1)
 
-                if current_batch == 0 and time.time() >= end_time: break # Exit outer loop if no tasks submitted
+                if current_batch == 0 and time.time() >= end_time: break
 
-                # Process completed results efficiently without blocking indefinitely
+                # *** --- CORRECTED RESULT PROCESSING LOOP --- ***
                 processed_in_batch = 0
-                # Use the fast iterator to get readily available results
-                completed_iterator = futures.fast_iterator()
-                for future in completed_iterator:
+                # Iterate directly over the as_completed iterator
+                # Process results that are ready within a short time window
+                batch_start_time = time.time()
+                max_batch_process_time = 1.0 # Process results for max 1 second per submission batch
+
+                for future in futures: # Iterate directly over as_completed
                     try:
-                        # Use a short timeout as future should be done
-                        result = future.result(timeout=1)
-                        # Result is expected tuple: (image_id, prediction_result)
-                        if result and result[0] is not None:
-                            outfile.write(f"{result[0]},{result[1]}\n")
-                            if "ERROR" in str(result[1]): error_count += 1
-                            results_count += 1
-                            processed_in_batch += 1
-                        elif result and result[0] is None:
-                             # Should only happen if input URL was empty
-                             log.warning(f"Task returned None ID with result: {result[1]}")
-                             error_count += 1
-                        # Future is processed, remove it (implicitly done by as_completed iterator)
+                        # Check future status without blocking indefinitely initially
+                        if future.status == 'finished':
+                           # Use a small timeout as it should be ready
+                           result = future.result(timeout=0.1)
+                           # Result is expected tuple: (image_id, prediction_result)
+                           if result and result[0] is not None:
+                                outfile.write(f"{result[0]},{result[1]}\n")
+                                if "ERROR" in str(result[1]): error_count += 1
+                                results_count += 1
+                                processed_in_batch += 1
+                           elif result and result[0] is None:
+                                # Should only happen if input URL was empty or ID extraction failed
+                                log.warning(f"Task returned None/URL as ID with result: {result[1]}")
+                                error_count += 1
+                           # Remove future from set (as_completed handles this implicitly)
+
+                        elif future.status == 'error':
+                            log.error(f"Task {future.key} failed with exception: {future.exception()}")
+                            error_count += 1
+                            # Remove future from set (as_completed handles this implicitly)
+
+                        # Break processing loop if we spend too long here to avoid blocking submission
+                        if time.time() - batch_start_time > max_batch_process_time:
+                             log.debug("Result processing time limit reached for this batch.")
+                             break
+
                     except TimeoutError:
-                         # Should be rare with fast_iterator, but possible under heavy load
-                         log.debug(f"Timeout getting result from supposedly completed future {future.key}.")
-                         futures.add(future) # Re-add to check later if needed, though unlikely to help
+                         # Future wasn't ready within the short timeout,
+                         # leave it in the as_completed set and try again later.
+                         log.debug(f"Future {future.key} not ready within timeout, will check later.")
                     except Exception as e:
                         log.error(f"Failed to retrieve result for {future.key}: {e}", exc_info=True)
                         error_count += 1
-                        # Future is processed, remove it (implicitly done by as_completed iterator)
+                        # Remove future from set (as_completed handles this implicitly)
+                # *** --- END CORRECTED RESULT PROCESSING LOOP --- ***
 
-                    # Optional: Limit processing per loop iteration to keep submitting
-                    if processed_in_batch > 1000: break
-
-                # Log progress periodically or when results come in
+                # Log progress
                 if submitted_count % 5000 == 0 or processed_in_batch > 0:
                     elapsed_time = time.time() - start_time
                     rate = results_count / elapsed_time if elapsed_time > 0 else 0
-                    # Calculate pending tasks accurately
                     pending = submitted_count - results_count - error_count
                     log.info(f"Submitted: {submitted_count}, Results: {results_count} (Errors: {error_count}), "
                              f"Pending: {pending}, Rate: {rate:.2f} img/s, "
                              f"Elapsed: {elapsed_time/3600:.2f} hrs")
 
-                # Basic backpressure: slow down submission if too many tasks are pending
-                # Calculate pending tasks again based on the set size
-                current_pending = len(futures) # Check how many futures are actually outstanding
-                if current_pending > (num_workers * 100): # e.g., > 100 tasks per worker pending
-                     # Simple linear backoff, capped
+                # Basic backpressure
+                current_pending = len(futures) # Check actual outstanding futures
+                if current_pending > (num_workers * 100):
                      sleep_time = 0.1 + (current_pending / (num_workers * 1000))
-                     time.sleep(min(sleep_time, 2.0)) # Max 2s sleep
+                     time.sleep(min(sleep_time, 2.0))
+
 
             log.info("Test duration reached or Image URL file ended. Stopping submission.")
 
             # --- Final Result Collection ---
-            remaining_tasks = len(futures) # Get count of outstanding futures
+            remaining_tasks = len(futures)
             log.info(f"Waiting for {remaining_tasks} remaining tasks...")
-            # Iterate over the remaining futures in the as_completed set
-            for future in futures:
+            for future in futures: # Iterate over remaining futures
                 try:
-                    # Use a longer timeout for final tasks
-                    result = future.result(timeout=300)
+                    result = future.result(timeout=300) # Longer timeout
                     if result and result[0] is not None:
                         outfile.write(f"{result[0]},{result[1]}\n")
                         if "ERROR" in str(result[1]): error_count += 1
                         results_count += 1
                     elif result and result[0] is None:
-                         log.warning(f"Task returned None ID during final wait: {result[1]}")
-                         error_count += 1
+                         log.warning(f"Task returned None/URL as ID during final wait: {result[1]}"); error_count += 1
                 except TimeoutError:
-                     log.error(f"Timeout waiting for final task result for {future.key}.")
-                     error_count += 1
+                     log.error(f"Timeout waiting for final task result for {future.key}."); error_count += 1
                 except Exception as e:
-                    log.error(f"Failed to retrieve result for {future.key} during final wait: {e}", exc_info=True)
-                    error_count += 1
+                    log.error(f"Failed to retrieve result for {future.key} during final wait: {e}", exc_info=True); error_count += 1
 
-                remaining_tasks -= 1 # Decrement counter based on loop iteration
+                remaining_tasks -= 1
                 if remaining_tasks % 1000 == 0 and remaining_tasks > 0:
                     log.info(f"Waiting for {remaining_tasks} more tasks...")
 
