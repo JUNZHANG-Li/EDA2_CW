@@ -1,13 +1,14 @@
 # Filename: app.py (with Detailed Timing Logs)
 import os
 import uuid
-import time # Import time module
+import time
 import traceback
 import io
-import logging # Import logging module
+import logging
+import sys
 from flask import Flask, request, render_template, redirect, url_for, flash, jsonify
 from werkzeug.utils import secure_filename
-from dask.distributed import Client, Future, wait, TimeoutError # Removed FIRST_COMPLETED
+from dask.distributed import Client, Future, wait, TimeoutError
 
 # --- Configuration ---
 UPLOAD_FOLDER = '/opt/comp0239_coursework/webapp/uploads'
