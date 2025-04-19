@@ -32,7 +32,7 @@
         group: "{{ target_user }}"
         mode: '0775'
 
-    - name: Copy Flask application script (app.py)
+    - name: Copy Flask application script
       ansible.builtin.copy:
         src: "{{ local_app_script }}"
         dest: "{{ webapp_base_dir }}/app.py"
@@ -55,7 +55,6 @@
         owner: root
         group: root
         mode: '0644'
-      notify: Reload systemd
 
     - name: Reload systemd daemon
       ansible.builtin.systemd:
