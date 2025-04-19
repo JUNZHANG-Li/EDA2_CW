@@ -1,12 +1,12 @@
-# Filename: app.py (with Real-time Status API)
+# Filename: app.py (with Detailed Status, Timing & Collapsible Logs)
 import os
 import uuid
 import time
 import traceback
 import io
-from flask import Flask, request, render_template, redirect, url_for, flash, jsonify # Import jsonify
+from flask import Flask, request, render_template, redirect, url_for, flash, jsonify
 from werkzeug.utils import secure_filename
-from dask.distributed import Client, Future, wait, TimeoutError # Keep TimeoutError
+from dask.distributed import Client, Future, wait, TimeoutError
 
 # --- Configuration ---
 UPLOAD_FOLDER = '/opt/comp0239_coursework/webapp/uploads'
@@ -28,40 +28,59 @@ try:
     print(f"Dask client connected: {client}")
     print(f"Dashboard Link: {client.dashboard_link}")
 except Exception as e:
-    print(f"CRITICAL: Failed to connect to Dask scheduler at {DASK_SCHEDULER}. App will not function.", file=sys.stderr)
+    print(f"CRITICAL: Failed to connect to Dask scheduler: {e}", file=sys.stderr)
     print(traceback.format_exc(), file=sys.stderr)
 
 # --- Job Store ---
-jobs = {} # Global job store
+# Enhanced structure for jobs[job_id]['image_data']
+# image_data will be a list of dictionaries:
+# [{'filename': str, 'future': DaskFuture, 'status': str,
+#   'result': str/None, 'submit_time': float/None, 'start_processing_time': float/None,
+#   'end_time': float/None, 'duration': float/None}, ...]
+jobs = {}
 
 # --- Helper Functions ---
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 # --- Dask Task Functions ---
-# (load_blip_and_caption and process_image_bytes remain unchanged)
+# (load_blip_and_caption remains the same)
 def load_blip_and_caption(image_bytes):
+    # ... (same as previous version) ...
     print("WORKER_INFO: Entering load_blip_and_caption")
     model_name = "Salesforce/blip-image-captioning-base"; processor = None; model = None
     try:
+        # Start timing *inside* the worker task
+        task_start_time = time.time()
         print(f"WORKER_INFO: Importing transformers/torch/PIL within task...")
         import torch; from transformers import BlipProcessor, BlipForConditionalGeneration; from PIL import Image; import io
         print("WORKER_INFO: Imports successful inside task.")
         print(f"WORKER_INFO: Loading BLIP Processor: {model_name}"); processor = BlipProcessor.from_pretrained(model_name)
         print(f"WORKER_INFO: Loading BLIP Model: {model_name}"); model = BlipForConditionalGeneration.from_pretrained(model_name)
         device = torch.device("cpu"); model.to(device); model.eval()
-        print("WORKER_INFO: BLIP Processor and Model loaded successfully.")
+        load_end_time = time.time()
+        print(f"WORKER_INFO: BLIP Processor and Model loaded successfully in {load_end_time - task_start_time:.2f}s.")
         print("WORKER_INFO: Preparing image..."); raw_image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
+        prep_end_time = time.time()
+        print(f"WORKER_INFO: Image prepared in {prep_end_time - load_end_time:.2f}s.")
         print("WORKER_INFO: Processing image with BlipProcessor..."); inputs = processor(raw_image, return_tensors="pt").to(device)
+        proc_end_time = time.time()
+        print(f"WORKER_INFO: BlipProcessor finished in {proc_end_time - prep_end_time:.2f}s.")
         print("WORKER_INFO: Generating caption (max_length=50)...")
         with torch.no_grad(): out = model.generate(**inputs, max_length=50, num_beams=4)
+        gen_end_time = time.time()
+        print(f"WORKER_INFO: Caption generated in {gen_end_time - proc_end_time:.2f}s.")
         print("WORKER_INFO: Decoding caption..."); caption = processor.decode(out[0], skip_special_tokens=True)
+        decode_end_time = time.time()
+        print(f"WORKER_INFO: Caption decoded in {decode_end_time - gen_end_time:.2f}s.")
         print(f"WORKER_INFO: Caption generated successfully: '{caption}'")
         return caption.replace("\n", " ").replace(",", ";").strip()
     except Exception as e: print(f"WORKER_ERROR in load_blip_and_caption: {e}\n{traceback.format_exc()}", file=sys.stderr); return f"ERROR: Caption generation failed ({e.__class__.__name__})"
     finally: del processor; del model
 
+
 def process_image_bytes(image_bytes):
+    # (This wrapper is mostly the same, calls load_blip_and_caption)
     t_start = time.time()
     if not image_bytes: print("WORKER_ERROR: Received empty image bytes.", file=sys.stderr); return "ERROR: Empty image data received"
     try: return load_blip_and_caption(image_bytes)
@@ -79,30 +98,45 @@ def upload_files():
     if 'images' not in request.files: flash('No file part.', 'error'); return redirect(url_for('index'))
 
     files = request.files.getlist('images')
-    submitted_futures = []; original_filenames = []; job_id = str(uuid.uuid4())
-    processed_count = 0
+    job_id = str(uuid.uuid4())
+    image_data_list = [] # Use a list to store data for each image
 
     if not files or files[0].filename == '': flash('No selected files.', 'warning'); return redirect(url_for('index'))
 
+    processed_count = 0
     for file in files:
         if file and allowed_file(file.filename):
             try:
-                filename = secure_filename(file.filename); image_bytes = file.read()
+                filename = secure_filename(file.filename)
+                image_bytes = file.read()
                 if not image_bytes: flash(f'Skipping empty file: {filename}', 'warning'); continue
-                print(f"Submitting task for {filename}...")
+
+                submit_time = time.time() # Record submission time
+                print(f"Submitting task for {filename} at {submit_time:.2f}...")
                 future = client.submit(process_image_bytes, image_bytes, pure=False)
-                submitted_futures.append(future); original_filenames.append(filename); processed_count += 1
+
+                # Initialize image data dictionary
+                image_data_list.append({
+                    'filename': filename,
+                    'future': future,
+                    'status': 'submitted', # Initial status
+                    'result': None,
+                    'submit_time': submit_time,
+                    'start_processing_time': None, # Worker sets this conceptually
+                    'end_time': None,
+                    'duration': None
+                })
+                processed_count += 1
             except Exception as e: flash(f'Error processing file {file.filename}: {e}', 'error'); print(f"Error submitting task: {e}"); traceback.print_exc()
         elif file and file.filename != '': flash(f'File type not allowed: {file.filename}', 'warning')
 
-    if not submitted_futures: flash('No valid images processed.', 'error'); return redirect(url_for('index'))
+    if not image_data_list: flash('No valid images processed.', 'error'); return redirect(url_for('index'))
 
+    # Store job information with the new image_data list
     jobs[job_id] = {
-        'status': 'processing', # Start as processing
-        'filenames': original_filenames,
-        'futures': submitted_futures,
-        'results': [None] * len(submitted_futures),
-        'total_tasks': len(submitted_futures),
+        'status': 'processing',
+        'image_data': image_data_list, # Store the list of dicts
+        'total_tasks': len(image_data_list),
         'completed_tasks': 0
     }
     flash(f'Submitted {processed_count} image(s). Job ID: {job_id}', 'success')
@@ -116,111 +150,124 @@ def show_results(job_id):
     if not job_info:
         flash(f'Job ID {job_id} not found.', 'error')
         return redirect(url_for('index'))
-
-    # Pass only necessary info for initial render
-    # JavaScript will fetch detailed status/results
+    # Pass filenames for initial rendering
+    initial_filenames = [img['filename'] for img in job_info.get('image_data', [])]
     return render_template('results.html',
                            job_id=job_id,
-                           initial_filenames=job_info['filenames']) # Pass filenames
+                           initial_filenames=initial_filenames)
 
 
 @app.route('/job_status/<job_id>', methods=['GET'])
 def job_status(job_id):
     """API endpoint to get detailed status and results for a job."""
     job_info = jobs.get(job_id)
-    if not job_info:
-        return jsonify({"error": "Job not found"}), 404
-    if client is None:
-         return jsonify({"error": "Dask client not available"}), 503
+    if not job_info: return jsonify({"error": "Job not found"}), 404
+    if client is None: return jsonify({"error": "Dask client not available"}), 503
 
-    image_statuses = []
+    image_statuses_api = [] # Data to return via API
     num_done = 0
-    overall_status = job_info.get('status', 'unknown') # Use stored status
+    overall_status = job_info.get('status', 'unknown')
+    all_tasks_accounted_for = True # Assume complete until proven otherwise
 
-    if overall_status == 'processing':
-        all_accounted_for = True # Assume complete until proven otherwise
-        futures_to_check = job_info.get('futures', [])
+    image_data_list = job_info.get('image_data', [])
 
-        if not futures_to_check: # Handle case where futures might have been cleared
-            overall_status = 'complete' if job_info.get('results') else 'error' # Infer status
-            all_accounted_for = True
+    if overall_status == 'processing': # Only check futures if still processing
+        if not image_data_list: # Should not happen if upload worked
+             overall_status = 'error'
+             all_tasks_accounted_for = True
         else:
-            for i, future in enumerate(futures_to_check):
-                filename = job_info['filenames'][i]
-                current_result = job_info['results'][i]
-                status_str = 'queued' # Default
+            current_futures = [img['future'] for img in image_data_list if img['future'] is not None and img['end_time'] is None]
+            done_set = set()
+            if current_futures:
+                try:
+                    # Check which futures completed without significant waiting
+                    done_set, _ = wait(current_futures, timeout=0) # Non-blocking check
+                except Exception as e:
+                     print(f"Error during dask wait for job {job_id}: {e}") # Log error but continue
 
-                # If we already have the result, don't check future again
-                if current_result is not None:
+            for i, img_data in enumerate(image_data_list):
+                # Skip if already processed (has end_time)
+                if img_data['end_time'] is not None:
                     num_done += 1
-                    status_str = 'error' if current_result.startswith("ERROR:") else 'complete'
-                elif future.done():
+                    continue # Already have final data for this image
+
+                future = img_data['future']
+                if future is None: # Should not happen in this flow
+                    all_tasks_accounted_for = False
+                    continue
+
+                status_str = img_data['status'] # Keep last known status unless updated
+
+                if future in done_set: # If wait() found it's done
                     try:
+                        # Try to get result/error and record end time
+                        end_time = time.time()
+                        img_data['end_time'] = end_time
                         if future.status == 'finished':
-                            # Attempt to get result only if not already stored
-                            current_result = future.result(timeout=0.1) # Short timeout
-                            job_info['results'][i] = current_result # Store it
-                            status_str = 'complete'
+                            img_data['result'] = future.result(timeout=0.1) # Short timeout
+                            img_data['status'] = 'complete'
                         elif future.status == 'error':
-                            exception_str = f"ERROR: Task failed - {future.exception(timeout=0.1)}"
-                            job_info['results'][i] = exception_str # Store error
-                            current_result = exception_str
-                            status_str = 'error'
-                        else:
-                            # Should be impossible if future.done() is true
-                            status_str = 'unknown'
-                            all_accounted_for = False # Mark as not done
-                        num_done += 1
+                            exc = future.exception(timeout=0.1)
+                            img_data['result'] = f"ERROR: Task failed - {exc.__class__.__name__}"
+                            img_data['status'] = 'error'
+                        else: # Should not happen
+                             img_data['status'] = 'unknown_done'
+
+                        # Calculate duration
+                        if img_data['submit_time']:
+                            img_data['duration'] = end_time - img_data['submit_time']
+
+                        num_done += 1 # Mark as done for progress
+
                     except TimeoutError:
-                        # Result wasn't available immediately, keep polling
-                        status_str = 'finishing' # Indicate it's done but result pending
-                        all_accounted_for = False
+                        # Still processing result retrieval, keep polling
+                        img_data['status'] = 'finishing'
+                        all_tasks_accounted_for = False
                     except Exception as e:
                         print(f"Error retrieving result/exception for job {job_id}, future {future.key}: {e}")
-                        error_str = f"ERROR: Failed retrieval - {e.__class__.__name__}"
-                        job_info['results'][i] = error_str
-                        current_result = error_str
-                        status_str = 'error'
+                        img_data['result'] = f"ERROR: Failed retrieval - {e.__class__.__name__}"
+                        img_data['status'] = 'error'
+                        img_data['end_time'] = time.time() # Mark end time even on retrieval error
+                        if img_data['submit_time']: img_data['duration'] = img_data['end_time'] - img_data['submit_time']
                         num_done += 1
-                else:
-                    # Future not done, check Dask status
-                    status_str = future.status # e.g., 'pending', 'running'
-                    all_accounted_for = False
+                    finally:
+                        # We don't need the future object anymore once processed
+                        img_data['future'] = None
 
-                image_statuses.append({
-                    "filename": filename,
-                    "status": status_str,
-                    "result": current_result # Send current result (or None)
-                })
+                else: # Future not in done_set
+                     status_str = future.status # Get current dask status ('pending', 'running', etc)
+                     img_data['status'] = status_str # Update status
+                     all_tasks_accounted_for = False
 
-            # Update overall status
-            if all_accounted_for:
+            # Update overall job status
+            if all_tasks_accounted_for:
                 overall_status = 'complete'
-                # Optional: Clear futures list from job_info to save memory
-                if 'futures' in job_info: del job_info['futures']
             else:
                 overall_status = 'processing'
-
-            # Update job store
             job_info['status'] = overall_status
             job_info['completed_tasks'] = num_done
 
-    else: # Job already marked as complete or error
-        # Just retrieve stored results if status isn't 'processing'
-        for i, filename in enumerate(job_info['filenames']):
-            status_str = 'error' if str(job_info['results'][i]).startswith("ERROR:") else 'complete'
-            image_statuses.append({
-                "filename": filename,
-                "status": status_str,
-                "result": job_info['results'][i]
-            })
-        num_done = job_info.get('completed_tasks', len(image_statuses)) # Use stored count or total
+    # Prepare API response data AFTER checking/updating statuses
+    for img_data in image_data_list:
+         # Selectively send data to frontend
+        image_statuses_api.append({
+            "filename": img_data['filename'],
+            "status": img_data['status'], # Send the latest status string
+            "result": img_data['result'], # Send caption or error or None
+            "submit_time_str": f"{img_data['submit_time']:.2f}" if img_data['submit_time'] else "N/A",
+            "end_time_str": f"{img_data['end_time']:.2f}" if img_data['end_time'] else "N/A",
+            "duration_str": f"{img_data['duration']:.2f}s" if img_data['duration'] is not None else "N/A"
+        })
+        if img_data['end_time'] is not None: # Count completed tasks for progress based on end_time
+            num_done += 1 # Recalculate based on final data
 
-
-    # Calculate progress
+    # Final progress calculation
     progress_percent = 0
-    if job_info['total_tasks'] > 0:
-        progress_percent = int((num_done / job_info['total_tasks']) * 100)
+    total_tasks = job_info.get('total_tasks', 0)
+    if total_tasks > 0:
+        # Use the count of items with an end_time for progress
+        final_done_count = sum(1 for item in image_data_list if item.get('end_time') is not None)
+        progress_percent = int((final_done_count / total_tasks) * 100)
     if overall_status == 'complete':
          progress_percent = 100
 
@@ -229,9 +276,8 @@ def job_status(job_id):
         "job_id": job_id,
         "overall_status": overall_status,
         "progress_percent": progress_percent,
-        "image_statuses": image_statuses
+        "image_statuses": image_statuses_api # Send the structured data
     })
-
 
 # --- Run the App ---
 if __name__ == '__main__':

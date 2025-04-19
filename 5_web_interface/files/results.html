@@ -4,7 +4,6 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Captioning Results - Job {{ job_id }}</title>
-    <!-- REMOVED meta http-equiv="refresh" -->
     <style>
       body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; margin: 2em; background-color: #f8f9fa; }
       .container { background-color: #ffffff; padding: 2em; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); max-width: 900px; margin: auto; }
@@ -13,11 +12,13 @@
       th, td { border: 1px solid #dee2e6; padding: 10px 12px; text-align: left; vertical-align: top;}
       th { background-color: #e9ecef; font-weight: 600; }
       .status-label { font-weight: bold; padding: 0.3em 0.6em; border-radius: 4px; display: inline-block; font-size: 0.9em;}
-      .status-label.processing, .status-label.running { background-color: #cfe2ff; border: 1px solid #b6d4fe; color: #0a58ca;} /* Blueish for running */
-      .status-label.pending, .status-label.queued { background-color: #fff3cd; border: 1px solid #ffeeba; color: #856404;} /* Yellowish for pending */
+      .status-label.processing, .status-label.running, .status-label.finishing { background-color: #cfe2ff; border: 1px solid #b6d4fe; color: #0a58ca;} /* Blueish for running */
+      .status-label.pending, .status-label.queued, .status-label.submitted { background-color: #fff3cd; border: 1px solid #ffeeba; color: #856404;} /* Yellowish for pending */
       .status-label.complete, .status-label.finished { background-color: #d4edda; border: 1px solid #c3e6cb; color: #155724;} /* Green for complete */
-      .status-label.error { background: #f8d7da; border-color: #f5c6cb; color: #721c24; } /* Red for error */
-      .caption-text { font-family: serif; } /* Slightly different font for caption */
+      .status-label.error, .status-label.failed { background: #f8d7da; border-color: #f5c6cb; color: #721c24; } /* Red for error */
+      .status-label.unknown, .status-label.unknown_done { background: #e2e3e5; border-color: #d3d6d8; color: #41464b;} /* Grey for unknown */
+
+      .caption-text { font-family: serif; }
       .error-msg { color: #dc3545; font-style: italic;}
       a { color: #007bff; text-decoration: none; }
       a:hover { text-decoration: underline; }
@@ -26,9 +27,14 @@
       /* Progress Bar Styles */
       .progress-container { width: 100%; background-color: #e9ecef; border-radius: 4px; margin-bottom: 1em; height: 25px; position: relative; overflow: hidden; }
       .progress-bar { background-color: #0d6efd; height: 100%; transition: width 0.4s ease; text-align: center; line-height: 25px; color: white; font-weight: bold; }
-      .progress-bar.complete { background-color: #198754; } /* Green when complete */
-      .progress-bar.error { background-color: #dc3545; } /* Red if overall status is error */
+      .progress-bar.complete { background-color: #198754; }
+      .progress-bar.error { background-color: #dc3545; }
       #overall-status { font-weight: bold; margin-bottom: 1em; }
+
+      /* Styles for Collapsible Details */
+      .details-toggle { cursor: pointer; color: #0d6efd; font-size: 0.85em; margin-left: 10px; text-decoration: underline; }
+      .details-content { display: none; /* Hidden by default */ padding: 10px; background-color: #f9f9f9; border-top: 1px dashed #ccc; margin-top: 5px; font-size: 0.9em; color: #444; }
+      .details-content code { background-color: #e9ecef; padding: 2px 4px; border-radius: 3px; }
     </style>
   </head>
   <body>
@@ -54,12 +60,18 @@
                 </tr>
             </thead>
             <tbody id="results-table-body">
-                <!-- Initial rows rendered by Flask -->
+                <!-- Initial rows rendered by Flask, will be updated by JS -->
                 {% for filename in initial_filenames %}
                 <tr id="row-{{ loop.index0 }}">
                     <td>{{ filename }}</td>
                     <td id="status-{{ loop.index0 }}"><span class="status-label queued">Queued</span></td>
-                    <td id="result-{{ loop.index0 }}"><em>Waiting...</em></td>
+                    <td id="result-{{ loop.index0 }}">
+                        <em>Waiting...</em>
+                        <span class="details-toggle" onclick="toggleDetails({{ loop.index0 }})">[Details]</span>
+                        <div class="details-content" id="details-{{ loop.index0 }}">
+                            <!-- JS will populate this -->
+                        </div>
+                    </td>
                 </tr>
                 {% endfor %}
             </tbody>
@@ -72,93 +84,107 @@
     <!-- JavaScript for Polling -->
     <script>
         const jobId = document.getElementById('job-id').textContent;
-        let intervalId = null; // To store the interval timer
+        let intervalId = null;
+
+        function formatEpoch(epochSeconds) {
+            if (!epochSeconds || epochSeconds === "N/A") return "N/A";
+            try {
+                const date = new Date(parseFloat(epochSeconds) * 1000);
+                return date.toLocaleString(); // Adjust format as needed
+            } catch (e) {
+                return "Invalid Date";
+            }
+        }
+
+        function toggleDetails(index) {
+            const detailsDiv = document.getElementById(`details-${index}`);
+            if (detailsDiv) {
+                detailsDiv.style.display = detailsDiv.style.display === 'none' ? 'block' : 'none';
+            }
+        }
 
         function updateStatus() {
             fetch(`/job_status/${jobId}`)
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! status: ${response.status}`);
-                    }
-                    return response.json();
-                })
+                .then(response => response.ok ? response.json() : Promise.reject(`HTTP error ${response.status}`))
                 .then(data => {
                     if (data.error) {
                          console.error("Error fetching status:", data.error);
                          document.getElementById('overall-status').textContent = `Status: Error - ${data.error}`;
-                         if (intervalId) clearInterval(intervalId); // Stop polling on error
+                         if (intervalId) clearInterval(intervalId);
                          return;
                     }
 
                     // Update Overall Status & Progress Bar
-                    const overallStatusElement = document.getElementById('overall-status');
-                    const progressBarElement = document.getElementById('progress-bar');
-                    const progressPercentElement = document.getElementById('progress-percent');
+                    document.getElementById('overall-status').textContent = `Status: ${data.overall_status}`;
+                    const progressBar = document.getElementById('progress-bar');
+                    progressBar.style.width = data.progress_percent + '%';
+                    document.getElementById('progress-percent').textContent = data.progress_percent;
+                    progressBar.className = `progress-bar ${data.overall_status}`; // Update class for color
 
-                    overallStatusElement.textContent = `Status: ${data.overall_status}`;
-                    progressBarElement.style.width = data.progress_percent + '%';
-                    progressPercentElement.textContent = data.progress_percent;
-
-                    // Add/Remove classes for progress bar color based on overall status
-                    progressBarElement.classList.remove('processing', 'complete', 'error'); // Reset classes
-                    if (data.overall_status === 'processing') {
-                         progressBarElement.classList.add('processing');
-                    } else if (data.overall_status === 'complete') {
-                         progressBarElement.classList.add('complete');
-                    } else if (data.overall_status === 'error') {
-                         progressBarElement.classList.add('error');
+                    // Update individual image rows
+                    const tableBody = document.getElementById('results-table-body');
+                    if (data.image_statuses.length !== tableBody.rows.length) {
+                         console.warn("Mismatch between API data and table rows. Re-rendering might be needed for robustness.");
+                         // Basic fallback: just log or ignore for now. A full re-render would be complex.
                     }
 
-
-                    // Update individual image statuses and results
                     data.image_statuses.forEach((item, index) => {
                         const statusCell = document.getElementById(`status-${index}`);
                         const resultCell = document.getElementById(`result-${index}`);
+                        const detailsCell = document.getElementById(`details-${index}`);
+                        const toggleSpan = resultCell ? resultCell.querySelector('.details-toggle') : null; // Find toggle within result cell
 
                         if (statusCell) {
-                             // Map Dask status to CSS class and display text
-                             let statusClass = item.status.toLowerCase();
-                             let statusText = item.status.charAt(0).toUpperCase() + item.status.slice(1); // Capitalize
-                             if (statusClass === 'pending') { statusClass = 'queued'; statusText = 'Queued';} // User friendly
+                             let statusClass = item.status ? item.status.toLowerCase() : 'unknown';
+                             let statusText = item.status ? item.status.charAt(0).toUpperCase() + item.status.slice(1) : 'Unknown';
+                             if (statusClass === 'pending') { statusClass = 'queued'; statusText = 'Queued';}
                              if (statusClass === 'running') { statusClass = 'processing'; statusText = 'Processing';}
                              if (statusClass === 'finished') { statusClass = 'complete'; statusText = 'Complete';}
+                             if (statusClass === 'failed') { statusClass = 'error'; statusText = 'Error';}
 
                              statusCell.innerHTML = `<span class="status-label ${statusClass}">${statusText}</span>`;
                         }
 
                         if (resultCell) {
-                            if (item.result) {
-                                if (String(item.result).startsWith('ERROR:')) {
-                                    resultCell.innerHTML = `<span class="error-msg">${item.result}</span>`;
-                                } else {
-                                    resultCell.innerHTML = `<span class="caption-text">${item.result}</span>`;
-                                }
-                            } else if (item.status !== 'complete' && item.status !== 'error') {
-                                resultCell.innerHTML = '<em>Waiting...</em>'; // Show waiting if not done/errored
-                            }
+                             // Update result/caption first, preserving the toggle span
+                             let resultHTML = '<em>Waiting...</em>'; // Default
+                             if (item.result) {
+                                 if (String(item.result).startsWith('ERROR:')) {
+                                     resultHTML = `<span class="error-msg">${item.result}</span>`;
+                                 } else {
+                                     resultHTML = `<span class="caption-text">${item.result}</span>`;
+                                 }
+                             } else if (item.status === 'complete' || item.status === 'error' || item.status === 'failed') {
+                                 resultHTML = '<em>Result not available</em>'; // If done but no result string
+                             }
+                             // Reconstruct cell content, keeping the toggle
+                             resultCell.innerHTML = resultHTML + (toggleSpan ? toggleSpan.outerHTML : '');
+                         }
+
+                        if (detailsCell) {
+                            // Update details content
+                             detailsCell.innerHTML = `
+                                 Submitted: <code>${formatEpoch(item.submit_time_str)}</code><br>
+                                 Finished: <code>${formatEpoch(item.end_time_str)}</code><br>
+                                 Duration: <code>${item.duration_str}</code>
+                             `;
                         }
                     });
 
                     // Stop polling if job is complete or errored
                     if (data.overall_status === 'complete' || data.overall_status === 'error') {
-                        if (intervalId) {
-                             console.log("Job finished or errored. Stopping polling.");
-                             clearInterval(intervalId);
-                             intervalId = null;
-                        }
+                        if (intervalId) { console.log("Job finished or errored. Stopping polling."); clearInterval(intervalId); intervalId = null; }
                     }
                 })
                 .catch(error => {
                     console.error('Error fetching job status:', error);
                     document.getElementById('overall-status').textContent = 'Status: Error fetching updates';
-                    // Optionally stop polling on fetch error
-                    // if (intervalId) clearInterval(intervalId);
                 });
         }
 
-        // Start polling when the page loads
+        // Start polling
         intervalId = setInterval(updateStatus, 3000); // Poll every 3 seconds
-        updateStatus(); // Initial call to get status immediately
+        updateStatus(); // Initial call
 
     </script>
 
