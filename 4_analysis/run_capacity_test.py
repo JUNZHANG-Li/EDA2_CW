@@ -1,4 +1,3 @@
-# Filename: run_capacity_test.py (Use "URL Unavailable" Error String)
 import time
 import datetime
 import argparse
