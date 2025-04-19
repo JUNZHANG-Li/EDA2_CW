@@ -12,8 +12,7 @@ Group={{ target_user }}
 WorkingDirectory={{ webapp_base_dir }}
 
 # Command to execute the Flask app using Gunicorn
-# Point ExecStart to the gunicorn executable in the user's local bin directory
-# Use the full path to the gunicorn executable: /home/{{ target_user }}/.local/bin/gunicorn
+# Gunicorn is installed system-wide, so it should be in the default PATH.
 # Options:
 # --workers: number of worker processes (start with 1 or 2, adjust based on load)
 # --bind: the host and port Gunicorn should listen on
@@ -21,7 +20,7 @@ WorkingDirectory={{ webapp_base_dir }}
 # --limit-request-body: max size of request body in bytes. Set this > 12MB (e.g., 100MB = 104857600).
 #                       0 means no limit, but a reasonable limit is recommended.
 # app:app: Tells Gunicorn to find the Flask application instance 'app' in 'app.py'
-ExecStart=/home/{{ target_user }}/.local/bin/gunicorn --workers 2 --bind 0.0.0.0:5000 --timeout 120 --limit-request-body 104857600 app:app
+ExecStart=gunicorn --workers 2 --bind 0.0.0.0:5000 --timeout 120 --limit-request-body 104857600 app:app
 
 # Restart the service if it fails
 Restart=always
