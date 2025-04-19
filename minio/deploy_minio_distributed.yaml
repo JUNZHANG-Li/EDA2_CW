@@ -1,79 +1,133 @@
-# filename: deploy_minio_distributed.yaml (RPM Version)
+# filename: deploy_minio_distributed.yaml (Use minio-user)
 ---
 - name: Deploy MinIO Server in Distributed Mode on Workers using RPM
   hosts: workers
-  become: true
+  become: true # Need root privileges
 
   vars:
-    # MinIO Configuration
+    # MinIO Configuration (Customize as needed)
     minio_rpm_url: "https://dl.min.io/server/minio/release/linux-amd64/minio.rpm"
-    # Default service name often used by RPMs, verify this
+    # Default service name often used by RPMs, verify this on target system if needed
     minio_service_name: "minio"
+    # Directory on the mounted secondary disk for MinIO data
     minio_data_dir: "/data/minio-data"
 
     # --- SECURITY WARNING ---
+    # Storing secrets directly is insecure. Use Ansible Vault for production.
     minio_root_user: "minioadmin" # CHANGE THIS
-    minio_root_password: "minioadmin"
+    minio_root_password: "minioadmin" # CHANGE THIS to something strong
 
-    minio_env_file: "/etc/default/minio"
+    # Location where RPM environment config is likely stored
+    # Check 'systemctl cat minio.service' on a worker after RPM install if unsure
+    minio_env_file: "/etc/default/minio" # Common location for Debian/Ubuntu based (like derived systemd units)
+    # minio_env_file: "/etc/sysconfig/minio" # Common location for RHEL based
+
+    # --- Define the correct user/group (assuming created by RPM) ---
+    minio_service_user: "minio-user"
+    minio_service_group: "minio-user" # Often the same as user for RPMs
+
+    # Path to your local environment template file
+    local_env_template: "./templates/minio_env.j2" # Adjust path if needed
+
+    # Path to your local service template file (ONLY needed if overriding RPM's default)
+    # local_service_template: "./templates/minio.service.j2" # Keep commented out initially
 
   tasks:
+    - name: Ensure essential packages are present (wget, policycoreutils-python-utils for SELinux check)
+      ansible.builtin.package:
+        name:
+         - wget
+         - policycoreutils-python-utils # Provides semanage for SELinux context check/fix
+        state: present
+        update_cache: yes
+      ignore_errors: yes # Allow failure if package names differ or not needed
+
     # --- Install MinIO via RPM ---
-    - name: Install MinIO from RPM URL using DNF
-      ansible.builtin.dnf:
+    - name: Install MinIO from RPM URL (using DNF/YUM module is preferred)
+      ansible.builtin.dnf: # Use 'yum' if dnf is not available
         name: "{{ minio_rpm_url }}"
         state: present
-        disable_gpg_check: yes
+        disable_gpg_check: yes # WARNING: Less secure. Import key for production.
+      register: rpm_install_result
 
     # --- Configure Environment Variables ---
-    - name: Ensure MinIO environment directory exists (e.g., /etc/default)
+    - name: Ensure MinIO environment directory exists
       ansible.builtin.file:
         path: "{{ minio_env_file | dirname }}"
         state: directory
         mode: '0755'
 
-    - name: Configure MinIO environment variables
+    - name: Configure MinIO environment variables (MINIO_VOLUMES, Credentials, etc.)
       ansible.builtin.template:
-        src: files/minio_env.j2
+        src: "{{ local_env_template }}" # Path to your minio_env.j2
         dest: "{{ minio_env_file }}"
-        owner: root
-        group: root
+        owner: root # Environment file usually owned/read by root or service user
+        group: root # Group needs read access if service user needs it
         mode: '0640' # Restrict read access
-      # Notify service restart if this file changes (if using handlers)
       register: minio_env_config
+      # Notify service restart if this file changes (only relevant if using handlers)
 
     # --- Prepare Storage Directory ---
-    - name: Ensure MinIO data directory exists on /data mount
+    - name: Ensure MinIO data directory exists on /data mount with correct ownership
       ansible.builtin.file:
         path: "{{ minio_data_dir }}"
         state: directory
-        owner: root
-        group: root
-        mode: '0700'
+        owner: "{{ minio_service_user }}"  # <<< Use minio-user
+        group: "{{ minio_service_group }}" # <<< Use minio-user group
+        mode: '0770' # Give user/group rwx, deny others explicitly
 
-    # --- Start and Enable Service (using RPM's service file) ---
-    - name: Reload systemd daemon to recognize potentially new service file from RPM
+    # Optional: Set SELinux context if applicable (Common on RHEL/CentOS/Fedora/AlmaLinux)
+    # This allows the minio process type to write to the non-standard directory location
+    - name: Set SELinux context for MinIO data directory (if SELinux is enforcing)
+      ansible.builtin.sefcontext:
+        target: '{{ minio_data_dir }}(/.*)?' # Apply to directory and contents
+        setype: 'minio_var_lib_t' # Common context type for MinIO data, VERIFY this type exists
+        state: present
+      notify: Restore SELinux Contexts # Use a handler or run restorecon command below
+      ignore_errors: yes # Ignore if semanage command or context type doesn't exist
+
+    - name: Apply SELinux context changes immediately (alternative to handler)
+      ansible.builtin.command: "restorecon -R -v {{ minio_data_dir }}"
+      changed_when: false # restorecon itself doesn't indicate config change to Ansible
+      when: ansible_selinux is defined and ansible_selinux.status == "enabled" and ansible_selinux.mode == "enforcing"
+      ignore_errors: yes # Ignore if restorecon fails (e.g., context already set)
+
+
+    # --- Configure Systemd Service (Optional Override - KEEP COMMENTED INITIALLY) ---
+    # Only uncomment this block if the default service file from the RPM
+    # does not correctly use the MINIO_VOLUMES from the environment file.
+    # - name: Create MinIO systemd service file from template (Optional Override)
+    #   ansible.builtin.template:
+    #     src: "{{ local_service_template }}" # Ensure User/Group are minio-user in this file
+    #     dest: /etc/systemd/system/minio.service
+    #     owner: root
+    #     group: root
+    #     mode: '0644'
+    #   register: minio_service_file # Needed for conditional reload/restart below
+
+    # --- Start and Enable Service ---
+    - name: Reload systemd daemon (if env file or service file changed)
       ansible.builtin.systemd:
         daemon_reload: yes
-      # Only reload if the env file changed (service might need restart to read it)
-      # when: minio_env_config.changed
+      # Trigger reload if env file changed OR if the optional service override task ran and changed the file
+      when: minio_env_config.changed or (minio_service_file is defined and minio_service_file.changed)
 
-    - name: Enable and start the MinIO service
+    - name: Enable and ensure MinIO service is started
       ansible.builtin.systemd:
-        name: "{{ minio_service_name }}" # Use service name from RPM
-        state: started
-        enabled: yes
+        name: "{{ minio_service_name }}" # Use service name expected from RPM
+        state: started # Ensure it's running (starts if not)
+        enabled: yes   # Ensure it starts on boot
 
-    # Add explicit restart if env vars changed (if not using handlers)
-    - name: Restart MinIO service if environment variables changed
+    # Explicit restart only if configuration files actually changed
+    - name: Restart MinIO service if configuration changed
       ansible.builtin.systemd:
         name: "{{ minio_service_name }}"
         state: restarted
-      when: minio_env_config.changed
+      when: minio_env_config.changed or (minio_service_file is defined and minio_service_file.changed)
 
-    - name: Wait briefly for service to initialize
+    - name: Wait briefly for service to initialize across nodes
       ansible.builtin.pause:
-        seconds: 10
+        seconds: 15 # Increase pause slightly for distributed startup
 
     # --- Verification ---
     - name: Check MinIO service status
@@ -88,5 +142,10 @@
           - "{{ minio_service_name }} service is active on {{ inventory_hostname }}."
           - "Access API/Client via: http://{{ ansible_default_ipv4.address }}:9000"
           - "Access Console via: http://{{ ansible_default_ipv4.address }}:9001"
-          - "Use User: {{ minio_root_user }} / Pass: [REDACTED]"
+          - "Use User: {{ minio_root_user }} / Pass: [REDACTED - Use Vault!]"
       when: minio_status.rc == 0
+
+
+    - name: Restore SELinux Contexts
+      ansible.builtin.command: "restorecon -R -v {{ minio_data_dir }}"
+      listen: Restore SELinux Contexts

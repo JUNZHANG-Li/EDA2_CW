@@ -1,28 +1,29 @@
+# Filename: templates/minio.service.j2 (ONLY IF OVERRIDING RPM DEFAULT)
 [Unit]
-Description=MinIO Distributed Object Storage Server
+Description=MinIO Distributed Object Storage Server (Custom Service File)
 Documentation=https://min.io/docs/minio/linux/index.html
 Wants=network-online.target
 After=network-online.target
-AssertFileIsExecutable=/usr/local/bin/minio
+# If using RPM binary path: AssertFileIsExecutable=/usr/sbin/minio (or wherever RPM installs it)
+# If using manual binary path: AssertFileIsExecutable=/usr/local/bin/minio
 
 [Service]
-WorkingDirectory=/data/minio-data/
+WorkingDirectory={{ minio_data_dir }} # Use data dir as working dir
 
-# Environment variables for MinIO credentials (INSECURE - Use Vault in production!)
-Environment="MINIO_ROOT_USER={{ minio_root_user }}"
-Environment="MINIO_ROOT_PASSWORD={{ minio_root_password }}"
+# Point to the environment file you are configuring
+EnvironmentFile=-{{ minio_env_file }}
 
-# Run as root for simplicity here, ensure /data/minio-data owned by root
-# Consider creating a dedicated minio-user in a real setup
-User=root
-Group=root
+# --- Use the correct user/group ---
+User={{ minio_service_user }}
+Group={{ minio_service_group }}
+# --- END ---
 
-# Construct the server arguments dynamically listing all worker IPs/paths
-# Note the trailing space after each URL segment is important
-ExecStart=/usr/local/bin/minio server \
-  {% for host in groups['workers'] %}http://{{ hostvars[host]['ip'] }}/data/minio-data {% endfor %} \
-  --console-address ":9001" \
-  --address ":9000"
+# Define ExecStart with distributed paths explicitly
+# Ensure the binary path used here matches where it's actually installed
+ExecStart=/usr/sbin/minio server ${MINIO_VOLUMES} ${MINIO_OPTS}
+# Or if manually installed binary:
+# ExecStart=/usr/local/bin/minio server ${MINIO_VOLUMES} ${MINIO_OPTS}
+
 
 Restart=always
 LimitNOFILE=65536
