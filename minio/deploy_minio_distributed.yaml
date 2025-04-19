@@ -1,19 +1,24 @@
-# filename: deploy_minio_distributed.yaml (Add User Creation)
+# filename: deploy_minio_distributed.yaml (Use minio-user, check RPM, templates in files/)
 ---
 - name: Deploy MinIO Server in Distributed Mode on Workers using RPM
   hosts: workers
   become: true
 
   vars:
+    # MinIO Configuration
+    minio_package_name: "minio" # Package name likely used by RPM
     minio_rpm_url: "https://dl.min.io/server/minio/release/linux-amd64/minio.rpm"
     minio_service_name: "minio"
     minio_data_dir: "/data/minio-data"
     minio_root_user: "minioadmin" # CHANGE THIS
     minio_root_password: "minioStrongPassword123" # CHANGE THIS
     minio_env_file: "/etc/default/minio" # VERIFY THIS PATH!
-    minio_service_user: "minio-user" # User the service will run as
-    minio_service_group: "minio-user" # Group the service will run as
+    minio_service_user: "minio-user"
+    minio_service_group: "minio-user"
+
+    # --- Corrected Path for Templates ---
     local_env_template: "./files/minio_env.j2"
+    # local_service_template: "./files/minio.service.j2" # Only needed if overriding
 
   tasks:
     - name: Ensure essential packages are present
@@ -25,30 +30,34 @@
         update_cache: yes
       ignore_errors: yes
 
-    # --- Install MinIO via RPM ---
-    - name: Install MinIO from RPM URL
+    # --- Install MinIO via RPM (Conditional) ---
+    - name: Check if MinIO package is already installed
+      ansible.builtin.package_facts:
+        manager: auto # Detects dnf/yum automatically
+
+    - name: Install MinIO from RPM URL if not already installed
       ansible.builtin.dnf: # Or yum
         name: "{{ minio_rpm_url }}"
         state: present
         disable_gpg_check: yes
-      register: rpm_install_result
+      # Run only if the package isn't found in package_facts
+      when: minio_package_name not in ansible_facts.packages
 
-    # --- ADDED: Explicit User and Group Creation ---
+    # --- User and Group Creation ---
     - name: Ensure MinIO service group exists
       ansible.builtin.group:
         name: "{{ minio_service_group }}"
         state: present
-        system: yes # Mark as system group
+        system: yes
 
     - name: Ensure MinIO service user exists
       ansible.builtin.user:
         name: "{{ minio_service_user }}"
         group: "{{ minio_service_group }}"
-        system: yes # Mark as system user
-        create_home: no # No home directory needed
-        shell: /sbin/nologin # Prevent login
+        system: yes
+        create_home: no
+        shell: /sbin/nologin
         state: present
-    # --- END ADDED USER/GROUP CREATION ---
 
     # --- Configure Environment Variables ---
     - name: Ensure MinIO environment directory exists
@@ -59,7 +68,7 @@
 
     - name: Configure MinIO environment variables
       ansible.builtin.template:
-        src: "{{ local_env_template }}"
+        src: "{{ local_env_template }}" # Uses path from vars
         dest: "{{ minio_env_file }}"
         owner: root
         group: root
@@ -71,13 +80,12 @@
       ansible.builtin.file:
         path: "{{ minio_data_dir }}"
         state: directory
-        owner: "{{ minio_service_user }}"  # Should now succeed
-        group: "{{ minio_service_group }}" # Should now succeed
-        mode: '0770' # Give user/group rwx, deny others explicitly
+        owner: "{{ minio_service_user }}"
+        group: "{{ minio_service_group }}"
+        mode: '0770'
 
-    # Optional: SELinux context tasks (remain the same)
+    # Optional: SELinux context tasks
     - name: Set SELinux context for MinIO data directory (if SELinux is enforcing)
-      # ... (task content same as before) ...
       ansible.builtin.sefcontext:
         target: '{{ minio_data_dir }}(/.*)?'
         setype: 'minio_var_lib_t'
@@ -86,17 +94,26 @@
       ignore_errors: yes
 
     - name: Apply SELinux context changes immediately
-      # ... (task content same as before) ...
       ansible.builtin.command: "restorecon -R -v {{ minio_data_dir }}"
       changed_when: false
       when: ansible_selinux is defined and ansible_selinux.status == "enabled" and ansible_selinux.mode == "enforcing"
       ignore_errors: yes
 
+    # --- Configure Systemd Service (Optional Override - KEEP COMMENTED INITIALLY) ---
+    # - name: Create MinIO systemd service file from template (Optional Override)
+    #   ansible.builtin.template:
+    #     src: "{{ local_service_template }}" # Path uses files/ now
+    #     dest: /etc/systemd/system/minio.service
+    #     owner: root
+    #     group: root
+    #     mode: '0644'
+    #   register: minio_service_file
+
     # --- Start and Enable Service ---
-    - name: Reload systemd daemon (if env file changed)
+    - name: Reload systemd daemon (if env file or optional service file changed)
       ansible.builtin.systemd:
         daemon_reload: yes
-      when: minio_env_config.changed # Only reload if necessary
+      when: minio_env_config.changed or (minio_service_file is defined and minio_service_file.changed)
 
     - name: Enable and ensure MinIO service is started
       ansible.builtin.systemd:
