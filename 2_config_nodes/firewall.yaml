@@ -30,6 +30,9 @@
     - name: allow Dask Dashboard access
       ansible.builtin.shell: "ufw allow 8787"
 
+    - name: allow Flask Web App access
+      ansible.builtin.shell: "ufw allow 5000"
+    
     - name: allow S3 access
       ansible.builtin.shell: "ufw allow 9000"
 
