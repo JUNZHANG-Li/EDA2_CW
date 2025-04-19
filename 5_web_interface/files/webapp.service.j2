@@ -11,11 +11,17 @@ Group={{ target_user }}
 # Set the working directory to where app.py is located
 WorkingDirectory={{ webapp_base_dir }}
 
-# Command to execute the Flask app
-# Use the full path to python3 if needed, or ensure it's in the user's PATH
-# Add --host=0.0.0.0 and --port=5000 if not handled in app.py directly
-# Redirect stdout/stderr to journald for easy logging with journalctl
-ExecStart=/usr/bin/python3 {{ webapp_base_dir }}/app.py
+# Command to execute the Flask app using Gunicorn
+# Point ExecStart to the gunicorn executable in the user's local bin directory
+# Use the full path to the gunicorn executable: /home/{{ target_user }}/.local/bin/gunicorn
+# Options:
+# --workers: number of worker processes (start with 1 or 2, adjust based on load)
+# --bind: the host and port Gunicorn should listen on
+# --timeout: worker timeout (increase if tasks take long, BLIP can be slow)
+# --limit-request-body: max size of request body in bytes. Set this > 12MB (e.g., 100MB = 104857600).
+#                       0 means no limit, but a reasonable limit is recommended.
+# app:app: Tells Gunicorn to find the Flask application instance 'app' in 'app.py'
+ExecStart=/home/{{ target_user }}/.local/bin/gunicorn --workers 2 --bind 0.0.0.0:5000 --timeout 120 --limit-request-body 104857600 app:app
 
 # Restart the service if it fails
 Restart=always
