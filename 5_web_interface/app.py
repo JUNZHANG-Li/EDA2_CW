@@ -166,22 +166,10 @@ def upload_files():
     # --- Check Dask connection and Actor Status ---
     if client is None: job_logger.error("Upload failed: Dask client not connected."); flash('Service error: Dask client unavailable.', 'error'); return redirect(url_for('index'))
     if blip_actor_future is None: job_logger.error(f"Upload failed: Blip Actor future is None."); flash('Service error: Captioning actor unavailable.', 'error'); return redirect(url_for('index'))
-    # Check future status before submitting tasks to it
     if blip_actor_future.status == 'error':
-        try:
-             actor_exception = blip_actor_future.exception() # Try to get the exception
-             job_logger.error(f"Upload failed: Blip Actor future has status 'error'. Exception: {actor_exception}", exc_info=actor_exception)
-             flash(f'Service error: Captioning actor failed to initialize ({actor_exception}).', 'error')
-        except Exception as get_exc_e:
-             job_logger.error(f"Upload failed: Blip Actor future has status 'error', but failed to get exception: {get_exc_e}")
-             flash('Service error: Captioning actor failed to initialize (unknown reason).', 'error')
+        try: actor_exception = blip_actor_future.exception(); job_logger.error(f"Upload failed: Blip Actor future has status 'error'. Exception: {actor_exception}", exc_info=actor_exception); flash(f'Service error: Captioning actor failed to initialize ({actor_exception}).', 'error')
+        except Exception as get_exc_e: job_logger.error(f"Upload failed: Blip Actor future has status 'error', but failed to get exception: {get_exc_e}"); flash('Service error: Captioning actor failed to initialize (unknown reason).', 'error')
         return redirect(url_for('index'))
-    # Optional: check if it's pending too long? Might indicate worker issue.
-    # if blip_actor_future.status == 'pending':
-    #     job_logger.warning(f"Upload warning: Blip Actor future is still pending. Actor may not be initialized yet.")
-    #     # Decide whether to proceed or flash warning
-    # --- End Check ---
-
 
     if 'images' not in request.files: job_logger.warning("Upload failed: No 'images' file part."); flash('No file part in request.', 'error'); return redirect(url_for('index'))
 
@@ -197,7 +185,9 @@ def upload_files():
                 image_bytes = file.read()
                 if not image_bytes: job_logger.warning(f"JID:{job_id} - Skipping empty file: {filename}"); flash(f'Skipping empty file: {filename}', 'warning'); continue
                 job_logger.debug(f"JID:{job_id} - Submitting task for {filename} to Actor...")
-                future = client.submit(blip_actor_future.caption_image, image_bytes, pure=False) # Submit to actor method
+                # --- CORRECTED SUBMIT CALL ---
+                future = client.submit(BlipCaptionActor.caption_image, blip_actor_future, image_bytes, pure=False)
+                # --- END CORRECTION ---
                 submitted_futures.append(future); original_filenames.append(filename); processed_count += 1
             except Exception as e: job_logger.error(f"JID:{job_id} - Error processing/submitting file {filename}: {e}", exc_info=True); flash(f'Error processing file {filename}: {e}', 'error')
         elif file and file.filename != '': job_logger.warning(f"JID:{job_id} - File type not allowed: {file.filename}"); flash(f'File type not allowed: {file.filename}', 'warning')
