@@ -1,0 +1,33 @@
+[Unit]
+Description=MinIO Distributed Object Storage Server
+Documentation=https://min.io/docs/minio/linux/index.html
+Wants=network-online.target
+After=network-online.target
+AssertFileIsExecutable=/usr/local/bin/minio
+
+[Service]
+WorkingDirectory=/data/minio-data/
+
+# Environment variables for MinIO credentials (INSECURE - Use Vault in production!)
+Environment="MINIO_ROOT_USER={{ minio_root_user }}"
+Environment="MINIO_ROOT_PASSWORD={{ minio_root_password }}"
+
+# Run as root for simplicity here, ensure /data/minio-data owned by root
+# Consider creating a dedicated minio-user in a real setup
+User=root
+Group=root
+
+# Construct the server arguments dynamically listing all worker IPs/paths
+# Note the trailing space after each URL segment is important
+ExecStart=/usr/local/bin/minio server \
+  {% for host in groups['workers'] %}http://{{ hostvars[host]['ip'] }}/data/minio-data {% endfor %} \
+  --console-address ":9001" \
+  --address ":9000"
+
+Restart=always
+LimitNOFILE=65536
+TimeoutStopSec=infinity
+SendSIGKILL=no
+
+[Install]
+WantedBy=multi-user.target
