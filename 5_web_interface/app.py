@@ -121,59 +121,67 @@ def show_results(job_id):
     job_info = jobs.get(job_id)
     if not job_info: flash(f'Job ID {job_id} not found.', 'error'); return redirect(url_for('index'))
 
-    progress = 0 # Default progress
+    progress = 0
+    num_done = 0 # Count tasks with stored results/errors
+    all_accounted_for = True # Assume all are done until we find one not
 
-    # Check status of futures if job is still processing
-    if job_info['status'] == 'processing':
-        num_done = 0
-        try:
-            futures_to_check = job_info.get('futures', []) # Get the list of futures
-            if futures_to_check: # Check only if list exists
-                # Use wait with timeout=0 for non-blocking check
-                done_set, _ = wait(futures_to_check, timeout=0)
+    # Check status of futures if job is still processing or has futures listed
+    if job_info.get('futures'): # Check if futures list exists
+        futures_to_check = job_info['futures']
+        for i, future in enumerate(futures_to_check):
+            # --- IMPROVED LOGIC ---
+            # Skip if we already have a result for this index
+            if job_info['results'][i] is not None:
+                num_done += 1
+                continue # Already processed this one
 
-                for i, future in enumerate(futures_to_check):
-                    # Process only if the future is done AND result not yet stored
-                    if future in done_set and job_info['results'][i] is None:
-                        if future.status == 'finished':
-                            try:
-                                job_info['results'][i] = future.result(timeout=0.1) # Short timeout
-                            except Exception as e:
-                                job_info['results'][i] = f"ERROR: Failed to get result - {e}"
-                        elif future.status == 'error':
-                            try:
-                                job_info['results'][i] = f"ERROR: Task failed - {future.exception()}"
-                            except Exception as e:
-                                job_info['results'][i] = f"ERROR: Failed to get exception - {e}"
+            # Check status without long wait
+            if future.done(): # Check if Dask reports it as done (finished or error)
+                try:
+                    if future.status == 'finished':
+                       job_info['results'][i] = future.result(timeout=1) # Slightly longer timeout for retrieval
+                       num_done += 1
+                    elif future.status == 'error':
+                        try:
+                            job_info['results'][i] = f"ERROR: Task failed - {future.exception(timeout=1)}" # Get exception
+                        except Exception as e_inner:
+                            job_info['results'][i] = f"ERROR: Failed to get task exception - {e_inner}"
+                        num_done += 1 # Count errors as 'done' for progress
+                    else:
+                        # Should not happen if future.done() is true, but handle defensively
+                        all_accounted_for = False
+                except TimeoutError:
+                    # Getting result timed out even though it was done, try again next time
+                    log.warning(f"Timeout getting result/exception for done future {future.key}, job {job_id}")
+                    all_accounted_for = False
+                except Exception as e:
+                     # Failed to get result/exception for other reason
+                    log.error(f"Error getting result/exception for done future {future.key}, job {job_id}: {e}")
+                    job_info['results'][i] = f"ERROR: Failed to retrieve result/exception - {e}"
+                    num_done += 1 # Count as done
+            else:
+                # Future is still pending or running
+                all_accounted_for = False
+            # --- END IMPROVED LOGIC ---
 
-                    # Count how many have results (are done and processed)
-                    if job_info['results'][i] is not None:
-                        num_done += 1
+        # Update overall job status if all futures are accounted for
+        if all_accounted_for:
+            job_info['status'] = 'complete'
+            # Optional: Delete futures list now we have all results
+            # del job_info['futures']
+        else:
+             # Keep status as processing if any future isn't finished/processed
+             job_info['status'] = 'processing'
 
-            # Update completed count and calculate progress
-            job_info['completed_tasks'] = num_done
-            if job_info['total_tasks'] > 0:
-                progress = int((num_done / job_info['total_tasks']) * 100)
 
-            # Check if all tasks are now done
-            if num_done == job_info['total_tasks']:
-                job_info['status'] = 'complete'
-                # Remove futures from job info once complete to save memory
-                if 'futures' in job_info: del job_info['futures']
+    # Recalculate progress based on num_done (tasks with results/errors stored)
+    job_info['completed_tasks'] = num_done
+    if job_info['total_tasks'] > 0:
+        progress = int((num_done / job_info['total_tasks']) * 100)
 
-        except Exception as e:
-             print(f"Error checking/getting results for job {job_id}: {e}")
-             traceback.print_exc()
-             # Optionally set job status to 'error' if check fails badly
-             # job_info['status'] = 'error'
-
-    # If already complete, ensure progress is 100
-    elif job_info['status'] == 'complete':
-        progress = 100
-    elif job_info['status'] == 'error':
-        # Optionally calculate progress based on completed tasks even if overall job errored
-        if job_info['total_tasks'] > 0:
-            progress = int((job_info.get('completed_tasks', 0) / job_info['total_tasks']) * 100)
+    # If overall status is now complete, ensure progress is 100
+    if job_info['status'] == 'complete':
+         progress = 100
 
 
     results_display = list(zip(job_info['filenames'], job_info['results']))
@@ -182,7 +190,7 @@ def show_results(job_id):
                            job_id=job_id,
                            status=job_info['status'],
                            results=results_display,
-                           progress=progress) # Pass progress to template
+                           progress=progress)
 
 # --- Run the App ---
 if __name__ == '__main__':
