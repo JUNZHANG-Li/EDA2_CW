@@ -4,9 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Captioning Results - Job {{ job_id }}</title>
-    {% if status == 'processing' %}
-        <meta http-equiv="refresh" content="5"> <!-- Refresh slightly faster: 5 seconds -->
-    {% endif %}
+    <!-- REMOVED meta http-equiv="refresh" -->
     <style>
       body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; margin: 2em; background-color: #f8f9fa; }
       .container { background-color: #ffffff; padding: 2em; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); max-width: 900px; margin: auto; }
@@ -14,10 +12,12 @@
       table { border-collapse: collapse; width: 100%; margin-top: 1.5em; margin-bottom: 1.5em;}
       th, td { border: 1px solid #dee2e6; padding: 10px 12px; text-align: left; vertical-align: top;}
       th { background-color: #e9ecef; font-weight: 600; }
-      .status { font-weight: bold; padding: 0.5em 1em; border-radius: 4px; display: inline-block; }
-      .status.processing { background-color: #fff3cd; border: 1px solid #ffeeba; color: #856404;}
-      .status.complete { background-color: #d4edda; border: 1px solid #c3e6cb; color: #155724;}
-      .status.error { background: #f8d7da; border-color: #f5c6cb; color: #721c24; }
+      .status-label { font-weight: bold; padding: 0.3em 0.6em; border-radius: 4px; display: inline-block; font-size: 0.9em;}
+      .status-label.processing, .status-label.running { background-color: #cfe2ff; border: 1px solid #b6d4fe; color: #0a58ca;} /* Blueish for running */
+      .status-label.pending, .status-label.queued { background-color: #fff3cd; border: 1px solid #ffeeba; color: #856404;} /* Yellowish for pending */
+      .status-label.complete, .status-label.finished { background-color: #d4edda; border: 1px solid #c3e6cb; color: #155724;} /* Green for complete */
+      .status-label.error { background: #f8d7da; border-color: #f5c6cb; color: #721c24; } /* Red for error */
+      .caption-text { font-family: serif; } /* Slightly different font for caption */
       .error-msg { color: #dc3545; font-style: italic;}
       a { color: #007bff; text-decoration: none; }
       a:hover { text-decoration: underline; }
@@ -25,65 +25,142 @@
 
       /* Progress Bar Styles */
       .progress-container { width: 100%; background-color: #e9ecef; border-radius: 4px; margin-bottom: 1em; height: 25px; position: relative; overflow: hidden; }
-      .progress-bar { width: {{ progress }}%; background-color: #28a745; height: 100%; transition: width 0.4s ease; text-align: center; line-height: 25px; color: white; font-weight: bold; }
-      .progress-bar.processing { background-color: #007bff; } /* Blue while processing */
+      .progress-bar { background-color: #0d6efd; height: 100%; transition: width 0.4s ease; text-align: center; line-height: 25px; color: white; font-weight: bold; }
+      .progress-bar.complete { background-color: #198754; } /* Green when complete */
       .progress-bar.error { background-color: #dc3545; } /* Red if overall status is error */
-
+      #overall-status { font-weight: bold; margin-bottom: 1em; }
     </style>
   </head>
   <body>
     <div class="container">
-        <h1>Results for Job ID: {{ job_id }}</h1>
-        <p>Status: <span class="status {{ status }}">{{ status }}</span></p>
+        <h1>Results for Job ID: <span id="job-id">{{ job_id }}</span></h1>
+        <p id="overall-status">Status: Loading...</p>
 
         <!-- Progress Bar Section -->
         <div class="progress-container">
-             <div class="progress-bar {{ status }}" style="width: {{ progress }}%;">
-                 {{ progress }}%
+             <div id="progress-bar" class="progress-bar" style="width: 0%;">
+                 <span id="progress-percent">0</span>%
             </div>
         </div>
         <!-- End Progress Bar Section -->
 
-
-        {% if status == 'processing' %}
-          <p>Results are being generated. This page will automatically refresh every 5 seconds.</p>
-          <p><a href="{{ url_for('show_results', job_id=job_id) }}">Refresh Manually</a></p>
-        {% endif %}
-
-        {% if results %}
-            <h2>Generated Captions:</h2>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Original Filename</th>
-                        <th>Generated Caption / Status</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for filename, caption in results %}
-                    <tr>
-                        <td>{{ filename }}</td>
-                        <td>
-                            {% if caption %}
-                                {% if caption.startswith('ERROR:') %}
-                                    <span class="error-msg">{{ caption }}</span>
-                                {% else %}
-                                    {{ caption }}
-                                {% endif %}
-                            {% else %}
-                                <em>Processing...</em>
-                            {% endif %}
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        {% elif status == 'complete' %}
-            <p>Processing complete.</p> <!-- Simple message -->
-        {% endif %}
+        <h2>Image Details:</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Filename</th>
+                    <th>Status</th>
+                    <th>Caption / Result</th>
+                </tr>
+            </thead>
+            <tbody id="results-table-body">
+                <!-- Initial rows rendered by Flask -->
+                {% for filename in initial_filenames %}
+                <tr id="row-{{ loop.index0 }}">
+                    <td>{{ filename }}</td>
+                    <td id="status-{{ loop.index0 }}"><span class="status-label queued">Queued</span></td>
+                    <td id="result-{{ loop.index0 }}"><em>Waiting...</em></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
 
         <hr>
         <p><a href="{{ url_for('index') }}">Upload More Images</a></p>
     </div>
+
+    <!-- JavaScript for Polling -->
+    <script>
+        const jobId = document.getElementById('job-id').textContent;
+        let intervalId = null; // To store the interval timer
+
+        function updateStatus() {
+            fetch(`/job_status/${jobId}`)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    if (data.error) {
+                         console.error("Error fetching status:", data.error);
+                         document.getElementById('overall-status').textContent = `Status: Error - ${data.error}`;
+                         if (intervalId) clearInterval(intervalId); // Stop polling on error
+                         return;
+                    }
+
+                    // Update Overall Status & Progress Bar
+                    const overallStatusElement = document.getElementById('overall-status');
+                    const progressBarElement = document.getElementById('progress-bar');
+                    const progressPercentElement = document.getElementById('progress-percent');
+
+                    overallStatusElement.textContent = `Status: ${data.overall_status}`;
+                    progressBarElement.style.width = data.progress_percent + '%';
+                    progressPercentElement.textContent = data.progress_percent;
+
+                    // Add/Remove classes for progress bar color based on overall status
+                    progressBarElement.classList.remove('processing', 'complete', 'error'); // Reset classes
+                    if (data.overall_status === 'processing') {
+                         progressBarElement.classList.add('processing');
+                    } else if (data.overall_status === 'complete') {
+                         progressBarElement.classList.add('complete');
+                    } else if (data.overall_status === 'error') {
+                         progressBarElement.classList.add('error');
+                    }
+
+
+                    // Update individual image statuses and results
+                    data.image_statuses.forEach((item, index) => {
+                        const statusCell = document.getElementById(`status-${index}`);
+                        const resultCell = document.getElementById(`result-${index}`);
+
+                        if (statusCell) {
+                             // Map Dask status to CSS class and display text
+                             let statusClass = item.status.toLowerCase();
+                             let statusText = item.status.charAt(0).toUpperCase() + item.status.slice(1); // Capitalize
+                             if (statusClass === 'pending') { statusClass = 'queued'; statusText = 'Queued';} // User friendly
+                             if (statusClass === 'running') { statusClass = 'processing'; statusText = 'Processing';}
+                             if (statusClass === 'finished') { statusClass = 'complete'; statusText = 'Complete';}
+
+                             statusCell.innerHTML = `<span class="status-label ${statusClass}">${statusText}</span>`;
+                        }
+
+                        if (resultCell) {
+                            if (item.result) {
+                                if (String(item.result).startsWith('ERROR:')) {
+                                    resultCell.innerHTML = `<span class="error-msg">${item.result}</span>`;
+                                } else {
+                                    resultCell.innerHTML = `<span class="caption-text">${item.result}</span>`;
+                                }
+                            } else if (item.status !== 'complete' && item.status !== 'error') {
+                                resultCell.innerHTML = '<em>Waiting...</em>'; // Show waiting if not done/errored
+                            }
+                        }
+                    });
+
+                    // Stop polling if job is complete or errored
+                    if (data.overall_status === 'complete' || data.overall_status === 'error') {
+                        if (intervalId) {
+                             console.log("Job finished or errored. Stopping polling.");
+                             clearInterval(intervalId);
+                             intervalId = null;
+                        }
+                    }
+                })
+                .catch(error => {
+                    console.error('Error fetching job status:', error);
+                    document.getElementById('overall-status').textContent = 'Status: Error fetching updates';
+                    // Optionally stop polling on fetch error
+                    // if (intervalId) clearInterval(intervalId);
+                });
+        }
+
+        // Start polling when the page loads
+        intervalId = setInterval(updateStatus, 3000); // Poll every 3 seconds
+        updateStatus(); // Initial call to get status immediately
+
+    </script>
+
   </body>
 </html>

@@ -1,12 +1,12 @@
-# Filename: app.py (with Progress Calculation)
+# Filename: app.py (with Real-time Status API)
 import os
 import uuid
 import time
 import traceback
 import io
-from flask import Flask, request, render_template, redirect, url_for, flash, jsonify # Add jsonify
+from flask import Flask, request, render_template, redirect, url_for, flash, jsonify # Import jsonify
 from werkzeug.utils import secure_filename
-from dask.distributed import Client, Future, wait, TimeoutError # Removed FIRST_COMPLETED if still there
+from dask.distributed import Client, Future, wait, TimeoutError # Keep TimeoutError
 
 # --- Configuration ---
 UPLOAD_FOLDER = '/opt/comp0239_coursework/webapp/uploads'
@@ -18,7 +18,7 @@ DASK_SCHEDULER = '127.0.0.1:8786'
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
-app.secret_key = b'_5#y2L"F4Q8z\n\xec]/' # Keep or change secret key
+app.secret_key = b'_5#y2L"F4Q8z\n\xec]/'
 
 # --- Dask Client ---
 client = None
@@ -32,15 +32,14 @@ except Exception as e:
     print(traceback.format_exc(), file=sys.stderr)
 
 # --- Job Store ---
-jobs = {} # Keep simple in-memory store
+jobs = {} # Global job store
 
 # --- Helper Functions ---
 def allowed_file(filename):
-    return '.' in filename and \
-           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 # --- Dask Task Functions ---
-# (load_blip_and_caption and process_image_bytes remain unchanged from previous BLIP version)
+# (load_blip_and_caption and process_image_bytes remain unchanged)
 def load_blip_and_caption(image_bytes):
     print("WORKER_INFO: Entering load_blip_and_caption")
     model_name = "Salesforce/blip-image-captioning-base"; processor = None; model = None
@@ -72,14 +71,12 @@ def process_image_bytes(image_bytes):
 # --- Flask Routes ---
 @app.route('/', methods=['GET'])
 def index():
-    """Display the upload form."""
     return render_template('index.html')
 
 @app.route('/upload', methods=['POST'])
 def upload_files():
-    """Handle file uploads, submit tasks to Dask."""
-    if client is None: flash('Dask connection error. Cannot process uploads.', 'error'); return redirect(url_for('index'))
-    if 'images' not in request.files: flash('No file part in request.', 'error'); return redirect(url_for('index'))
+    if client is None: flash('Dask connection error.', 'error'); return redirect(url_for('index'))
+    if 'images' not in request.files: flash('No file part.', 'error'); return redirect(url_for('index'))
 
     files = request.files.getlist('images')
     submitted_futures = []; original_filenames = []; job_id = str(uuid.uuid4())
@@ -90,108 +87,151 @@ def upload_files():
     for file in files:
         if file and allowed_file(file.filename):
             try:
-                filename = secure_filename(file.filename)
-                image_bytes = file.read()
+                filename = secure_filename(file.filename); image_bytes = file.read()
                 if not image_bytes: flash(f'Skipping empty file: {filename}', 'warning'); continue
                 print(f"Submitting task for {filename}...")
                 future = client.submit(process_image_bytes, image_bytes, pure=False)
-                submitted_futures.append(future)
-                original_filenames.append(filename)
-                processed_count += 1
-            except Exception as e: flash(f'Error processing file {file.filename}: {e}', 'error'); print(f"Error submitting task for {file.filename}: {e}"); traceback.print_exc()
+                submitted_futures.append(future); original_filenames.append(filename); processed_count += 1
+            except Exception as e: flash(f'Error processing file {file.filename}: {e}', 'error'); print(f"Error submitting task: {e}"); traceback.print_exc()
         elif file and file.filename != '': flash(f'File type not allowed: {file.filename}', 'warning')
 
-    if not submitted_futures: flash('No valid image files were processed.', 'error'); return redirect(url_for('index'))
+    if not submitted_futures: flash('No valid images processed.', 'error'); return redirect(url_for('index'))
 
     jobs[job_id] = {
-        'status': 'processing',
+        'status': 'processing', # Start as processing
         'filenames': original_filenames,
         'futures': submitted_futures,
         'results': [None] * len(submitted_futures),
-        'total_tasks': len(submitted_futures), # Store total count
-        'completed_tasks': 0 # Initialize completed count
+        'total_tasks': len(submitted_futures),
+        'completed_tasks': 0
     }
-
-    flash(f'Successfully submitted {processed_count} image(s) for captioning. Job ID: {job_id}', 'success')
+    flash(f'Submitted {processed_count} image(s). Job ID: {job_id}', 'success')
     return redirect(url_for('show_results', job_id=job_id))
 
-@app.route('/results/<job_id>', methods=['GET'])
+
 @app.route('/results/<job_id>', methods=['GET'])
 def show_results(job_id):
-    """Display status and results for a given job ID."""
+    """Render the initial results page structure."""
     job_info = jobs.get(job_id)
-    if not job_info: flash(f'Job ID {job_id} not found.', 'error'); return redirect(url_for('index'))
+    if not job_info:
+        flash(f'Job ID {job_id} not found.', 'error')
+        return redirect(url_for('index'))
 
-    progress = 0
-    num_done = 0 # Count tasks with stored results/errors
-    all_accounted_for = True # Assume all are done until we find one not
-
-    # Check status of futures if job is still processing or has futures listed
-    if job_info.get('futures'): # Check if futures list exists
-        futures_to_check = job_info['futures']
-        for i, future in enumerate(futures_to_check):
-            # --- IMPROVED LOGIC ---
-            # Skip if we already have a result for this index
-            if job_info['results'][i] is not None:
-                num_done += 1
-                continue # Already processed this one
-
-            # Check status without long wait
-            if future.done(): # Check if Dask reports it as done (finished or error)
-                try:
-                    if future.status == 'finished':
-                       job_info['results'][i] = future.result(timeout=1) # Slightly longer timeout for retrieval
-                       num_done += 1
-                    elif future.status == 'error':
-                        try:
-                            job_info['results'][i] = f"ERROR: Task failed - {future.exception(timeout=1)}" # Get exception
-                        except Exception as e_inner:
-                            job_info['results'][i] = f"ERROR: Failed to get task exception - {e_inner}"
-                        num_done += 1 # Count errors as 'done' for progress
-                    else:
-                        # Should not happen if future.done() is true, but handle defensively
-                        all_accounted_for = False
-                except TimeoutError:
-                    # Getting result timed out even though it was done, try again next time
-                    log.warning(f"Timeout getting result/exception for done future {future.key}, job {job_id}")
-                    all_accounted_for = False
-                except Exception as e:
-                     # Failed to get result/exception for other reason
-                    log.error(f"Error getting result/exception for done future {future.key}, job {job_id}: {e}")
-                    job_info['results'][i] = f"ERROR: Failed to retrieve result/exception - {e}"
-                    num_done += 1 # Count as done
-            else:
-                # Future is still pending or running
-                all_accounted_for = False
-            # --- END IMPROVED LOGIC ---
-
-        # Update overall job status if all futures are accounted for
-        if all_accounted_for:
-            job_info['status'] = 'complete'
-            # Optional: Delete futures list now we have all results
-            # del job_info['futures']
-        else:
-             # Keep status as processing if any future isn't finished/processed
-             job_info['status'] = 'processing'
-
-
-    # Recalculate progress based on num_done (tasks with results/errors stored)
-    job_info['completed_tasks'] = num_done
-    if job_info['total_tasks'] > 0:
-        progress = int((num_done / job_info['total_tasks']) * 100)
-
-    # If overall status is now complete, ensure progress is 100
-    if job_info['status'] == 'complete':
-         progress = 100
-
-
-    results_display = list(zip(job_info['filenames'], job_info['results']))
-
+    # Pass only necessary info for initial render
+    # JavaScript will fetch detailed status/results
     return render_template('results.html',
                            job_id=job_id,
-                           status=job_info['status'],
-                           results=results_display,
-                           progress=progress)
+                           initial_filenames=job_info['filenames']) # Pass filenames
+
+
+@app.route('/job_status/<job_id>', methods=['GET'])
+def job_status(job_id):
+    """API endpoint to get detailed status and results for a job."""
+    job_info = jobs.get(job_id)
+    if not job_info:
+        return jsonify({"error": "Job not found"}), 404
+    if client is None:
+         return jsonify({"error": "Dask client not available"}), 503
+
+    image_statuses = []
+    num_done = 0
+    overall_status = job_info.get('status', 'unknown') # Use stored status
+
+    if overall_status == 'processing':
+        all_accounted_for = True # Assume complete until proven otherwise
+        futures_to_check = job_info.get('futures', [])
+
+        if not futures_to_check: # Handle case where futures might have been cleared
+            overall_status = 'complete' if job_info.get('results') else 'error' # Infer status
+            all_accounted_for = True
+        else:
+            for i, future in enumerate(futures_to_check):
+                filename = job_info['filenames'][i]
+                current_result = job_info['results'][i]
+                status_str = 'queued' # Default
+
+                # If we already have the result, don't check future again
+                if current_result is not None:
+                    num_done += 1
+                    status_str = 'error' if current_result.startswith("ERROR:") else 'complete'
+                elif future.done():
+                    try:
+                        if future.status == 'finished':
+                            # Attempt to get result only if not already stored
+                            current_result = future.result(timeout=0.1) # Short timeout
+                            job_info['results'][i] = current_result # Store it
+                            status_str = 'complete'
+                        elif future.status == 'error':
+                            exception_str = f"ERROR: Task failed - {future.exception(timeout=0.1)}"
+                            job_info['results'][i] = exception_str # Store error
+                            current_result = exception_str
+                            status_str = 'error'
+                        else:
+                            # Should be impossible if future.done() is true
+                            status_str = 'unknown'
+                            all_accounted_for = False # Mark as not done
+                        num_done += 1
+                    except TimeoutError:
+                        # Result wasn't available immediately, keep polling
+                        status_str = 'finishing' # Indicate it's done but result pending
+                        all_accounted_for = False
+                    except Exception as e:
+                        print(f"Error retrieving result/exception for job {job_id}, future {future.key}: {e}")
+                        error_str = f"ERROR: Failed retrieval - {e.__class__.__name__}"
+                        job_info['results'][i] = error_str
+                        current_result = error_str
+                        status_str = 'error'
+                        num_done += 1
+                else:
+                    # Future not done, check Dask status
+                    status_str = future.status # e.g., 'pending', 'running'
+                    all_accounted_for = False
+
+                image_statuses.append({
+                    "filename": filename,
+                    "status": status_str,
+                    "result": current_result # Send current result (or None)
+                })
+
+            # Update overall status
+            if all_accounted_for:
+                overall_status = 'complete'
+                # Optional: Clear futures list from job_info to save memory
+                if 'futures' in job_info: del job_info['futures']
+            else:
+                overall_status = 'processing'
+
+            # Update job store
+            job_info['status'] = overall_status
+            job_info['completed_tasks'] = num_done
+
+    else: # Job already marked as complete or error
+        # Just retrieve stored results if status isn't 'processing'
+        for i, filename in enumerate(job_info['filenames']):
+            status_str = 'error' if str(job_info['results'][i]).startswith("ERROR:") else 'complete'
+            image_statuses.append({
+                "filename": filename,
+                "status": status_str,
+                "result": job_info['results'][i]
+            })
+        num_done = job_info.get('completed_tasks', len(image_statuses)) # Use stored count or total
+
+
+    # Calculate progress
+    progress_percent = 0
+    if job_info['total_tasks'] > 0:
+        progress_percent = int((num_done / job_info['total_tasks']) * 100)
+    if overall_status == 'complete':
+         progress_percent = 100
+
+
+    return jsonify({
+        "job_id": job_id,
+        "overall_status": overall_status,
+        "progress_percent": progress_percent,
+        "image_statuses": image_statuses
+    })
+
 
 # --- Run the App ---
 if __name__ == '__main__':
