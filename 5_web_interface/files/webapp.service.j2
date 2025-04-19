@@ -1,6 +1,7 @@
 [Unit]
 Description=COMP0239 Flask Webapp (Image Captioning)
-After=network.target dask-scheduler.service # Ensure network and Dask scheduler are up
+# Ensure network target and Dask scheduler service are up before starting this service
+After=network.target dask-scheduler.service
 
 [Service]
 # Run as the user who owns the files and can write to uploads
