@@ -1,0 +1,14 @@
+# MinIO Environment Configuration File managed by Ansible
+
+# Set the volumes for distributed mode - THIS IS KEY!
+# List all nodes and their data paths
+MINIO_VOLUMES="{% for host in groups['workers'] %}http://{{ hostvars[host]['ip'] }}{{ minio_data_dir }} {% endfor %}"
+
+# Set the address and port for the API server (adjust if needed)
+MINIO_OPTS="--console-address :9001 --address :9000"
+
+# Set credentials (INSECURE - Use Vault!)
+MINIO_ROOT_USER={{ minio_root_user }}
+MINIO_ROOT_PASSWORD={{ minio_root_password }}
+
+# You might need to set MINIO_SERVER_URL or other vars depending on the service script
