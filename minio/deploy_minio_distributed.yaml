@@ -147,8 +147,8 @@
           - "Use User: {{ minio_root_user }} / Pass: [REDACTED - Use Vault!]"
       when: minio_status.rc == 0
 
-  # # --- Optional Handler for SELinux ---
-  # handlers:
-  #   - name: Restore SELinux Contexts
-  #     ansible.builtin.command: "restorecon -R -v {{ minio_data_dir }}"
-  #     listen: Restore SELinux Contexts
+  # --- Optional Handler for SELinux ---
+  handlers:
+    - name: Restore SELinux Contexts
+      ansible.builtin.command: "restorecon -R -v {{ minio_data_dir }}"
+      listen: Restore SELinux Contexts
