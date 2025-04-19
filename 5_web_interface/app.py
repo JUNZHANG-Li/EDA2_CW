@@ -201,39 +201,71 @@ def upload_files():
 
 @app.route('/results/<job_id>', methods=['GET'])
 def show_results(job_id):
+    """Display status and results for a given job ID."""
     job_logger.info(f"JID:{job_id} - Request to view results.")
     job_info = jobs.get(job_id)
     if not job_info: job_logger.error(f"JID:{job_id} - Job ID not found."); flash(f'Job ID {job_id} not found.', 'error'); return redirect(url_for('index'))
 
     progress = 0; num_done = 0; all_accounted_for = True; previous_status = job_info['status']
 
+    # Check status of futures if job is still processing or has futures listed
     if job_info.get('futures'):
         futures_to_check = job_info['futures']
         job_logger.debug(f"JID:{job_id} - Checking status of {len(futures_to_check)} futures.")
-        try: done_set, _ = wait(futures_to_check, timeout=0) # Non-blocking check
-        except Exception as e: job_logger.error(f"JID:{job_id} - Error during wait() check: {e}", exc_info=True); done_set = set()
 
         for i, future in enumerate(futures_to_check):
-            if job_info['results'][i] is not None: num_done += 1; continue
-            if future in done_set:
-                try:
-                    if future.status == 'finished': job_info['results'][i] = future.result(timeout=1); num_done += 1
-                    elif future.status == 'error':
-                        try: exc = future.exception(timeout=1); job_info['results'][i] = f"ERROR: Task failed - {exc}"; job_logger.error(f"JID:{job_id} - Task for file {job_info['filenames'][i]} failed: {exc}")
-                        except Exception as e_inner: job_info['results'][i] = f"ERROR: Failed to get task exception - {e_inner}"; job_logger.error(f"JID:{job_id} - Failed to get exception for failed task {future.key}: {e_inner}")
-                        num_done += 1
-                    else: all_accounted_for = False
-                except TimeoutError: job_logger.warning(f"JID:{job_id} - Timeout getting result/exception for done future {future.key}"); all_accounted_for = False
-                except Exception as e: job_logger.error(f"JID:{job_id} - Error getting result/exception for done future {future.key}: {e}", exc_info=True); job_info['results'][i] = f"ERROR: Failed to retrieve result/exception - {e}"; num_done += 1
-            else: all_accounted_for = False
+            if job_info['results'][i] is not None: # Skip if already processed
+                num_done += 1
+                continue
 
+            # --- REVISED CHECKING LOGIC ---
+            # Use the .done() method for a non-blocking check
+            if future.done():
+                try:
+                    # Future is finished or errored, attempt to get result/exception
+                    status = future.status # Get status ('finished' or 'error')
+                    if status == 'finished':
+                       job_info['results'][i] = future.result(timeout=1) # Use short timeout just in case
+                       num_done += 1
+                    elif status == 'error':
+                        try:
+                            exc = future.exception(timeout=1) # Try to get exception
+                            job_info['results'][i] = f"ERROR: Task failed - {exc}"
+                            job_logger.error(f"JID:{job_id} - Task for file {job_info['filenames'][i]} failed: {exc}")
+                        except Exception as e_inner:
+                            # Handle failure to get the exception itself
+                            job_info['results'][i] = f"ERROR: Failed to get task exception - {e_inner}"
+                            job_logger.error(f"JID:{job_id} - Failed to get exception for failed task {future.key}: {e_inner}")
+                        num_done += 1 # Count error as done
+                    else:
+                        # Should not happen if future.done() is true, but log defensively
+                        job_logger.warning(f"JID:{job_id} - Future {future.key} is done() but status is '{status}'.")
+                        all_accounted_for = False
+
+                except TimeoutError:
+                    # Getting result/exception timed out even though future was done
+                    job_logger.warning(f"JID:{job_id} - Timeout getting result/exception for done future {future.key}")
+                    all_accounted_for = False # Cannot confirm result yet
+                except Exception as e:
+                     # Other error getting result/exception
+                    job_logger.error(f"JID:{job_id} - Error getting result/exception for done future {future.key}: {e}", exc_info=True)
+                    job_info['results'][i] = f"ERROR: Failed to retrieve result/exception - {e}"
+                    num_done += 1 # Count as done (processed the error)
+            else:
+                # future.done() is False -> still pending or running
+                all_accounted_for = False
+            # --- END REVISED CHECKING LOGIC ---
+
+        # Update overall job status
         job_info['completed_tasks'] = num_done
         if all_accounted_for:
             job_info['status'] = 'complete'
             if previous_status != 'complete': job_logger.info(f"JID:{job_id} - Job marked as complete ({num_done}/{job_info['total_tasks']} tasks finished).")
             if 'futures' in job_info: del job_info['futures']
-        else: job_info['status'] = 'processing'
+        else:
+             job_info['status'] = 'processing'
 
+    # Recalculate progress
     if job_info['total_tasks'] > 0: progress = int((job_info.get('completed_tasks', 0) / job_info['total_tasks']) * 100)
     if job_info['status'] == 'complete': progress = 100
 
