@@ -1,0 +1,24 @@
+[Unit]
+Description=COMP0239 Flask Webapp (Image Captioning)
+After=network.target dask-scheduler.service # Ensure network and Dask scheduler are up
+
+[Service]
+# Run as the user who owns the files and can write to uploads
+User={{ target_user }}
+Group={{ target_user }}
+
+# Set the working directory to where app.py is located
+WorkingDirectory={{ webapp_base_dir }}
+
+# Command to execute the Flask app
+# Use the full path to python3 if needed, or ensure it's in the user's PATH
+# Add --host=0.0.0.0 and --port=5000 if not handled in app.py directly
+# Redirect stdout/stderr to journald for easy logging with journalctl
+ExecStart=/usr/bin/python3 {{ webapp_base_dir }}/app.py
+
+# Restart the service if it fails
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
