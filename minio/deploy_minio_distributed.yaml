@@ -13,7 +13,7 @@
     minio_env_file: "/etc/default/minio" # VERIFY THIS PATH!
     minio_service_user: "minio-user" # User the service will run as
     minio_service_group: "minio-user" # Group the service will run as
-    local_env_template: "./templates/minio_env.j2"
+    local_env_template: "./files/minio_env.j2"
 
   tasks:
     - name: Ensure essential packages are present
