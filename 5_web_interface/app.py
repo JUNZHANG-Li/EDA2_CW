@@ -1,22 +1,28 @@
-# Filename: app.py (Using Dask Actor)
+# Filename: app.py (with Early Debug Prints)
 import os
+import sys # Import sys for exit check below
+print("DEBUG: Script Started - Top Level") # <<< ADDED
+
 import uuid
 import time
 import traceback
 import io
-import logging
-import sys
+import logging # <<< Import logging
 from flask import Flask, request, render_template, redirect, url_for, flash, jsonify
 from werkzeug.utils import secure_filename
+# Dask libraries
 from dask.distributed import Client, Future, wait, TimeoutError, Actor # Import Actor
 
+print("DEBUG: Imports Seem OK") # <<< ADDED
+
 # --- Configuration ---
-WEBAPP_BASE_DIR = "/opt/comp0239_coursework/webapp"
+WEBAPP_BASE_DIR = "/opt/comp0239_coursework/webapp" # Define base for logs/uploads
 UPLOAD_FOLDER = os.path.join(WEBAPP_BASE_DIR, 'uploads')
-LOG_FILE = os.path.join(WEBAPP_BASE_DIR, 'user_jobs.log')
+LOG_FILE = os.path.join(WEBAPP_BASE_DIR, 'user_jobs.log') # <<< Define log file path
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 DASK_SCHEDULER = '127.0.0.1:8786'
+print("DEBUG: Config Parsed") # <<< ADDED
 
 # --- Job Logger Setup ---
 job_logger = logging.getLogger('JobLogger')
@@ -27,145 +33,141 @@ try:
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     file_handler.setFormatter(formatter)
     if not job_logger.handlers: job_logger.addHandler(file_handler)
-except Exception as log_e: print(f"CRITICAL: Failed to configure job logger: {log_e}", file=sys.stderr); traceback.print_exc(file=sys.stderr)
+except Exception as log_e:
+    print(f"CRITICAL: Failed to configure job logger: {log_e}", file=sys.stderr)
+    traceback.print_exc(file=sys.stderr)
+print("DEBUG: Logger Setup Done") # <<< ADDED
 
 # Flask App Setup
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 app.secret_key = b'_5#y2L"F4Q8z\n\xec]/'
+print("DEBUG: Flask App Initialized") # <<< ADDED
+
 
 # --- Dask Client and Actor Future ---
-# Global variables
 client = None
-blip_actor_future = None # Future representing the remote actor
-
+blip_actor_future = None
+print("DEBUG: Attempting Dask Connection...") # <<< ADDED
 try:
     job_logger.info("Attempting to connect to Dask scheduler...")
-    # Longer timeout for client connection might be useful
-    client = Client(DASK_SCHEDULER, timeout="30s", name="FlaskCaptionClient")
+    client = Client(DASK_SCHEDULER, timeout="10s") # Shortened timeout for testing startup
     job_logger.info(f"Dask client connected: {client}")
     job_logger.info(f"Dask dashboard link: {client.dashboard_link}")
+    print(f"DEBUG: Dask Client Connected: {client}") # <<< ADDED
 
-    # --- Submit Actor Class to Cluster ---
     job_logger.info("Submitting BlipCaptionActor to Dask cluster...")
-    # This tells Dask to start an instance of BlipCaptionActor on a worker.
-    # The actual __init__ runs lazily when the actor is first used or awaited.
     blip_actor_future = client.submit(BlipCaptionActor, actor=True)
-    # Optional: Wait a short time to ensure submission request went through
-    # future_status = blip_actor_future.result(timeout=10) # This *would* trigger init
     job_logger.info(f"BlipCaptionActor submission task created. Future: {blip_actor_future}")
+    print(f"DEBUG: Blip Actor Submitted. Future: {blip_actor_future}") # <<< ADDED
 
 except Exception as e:
     job_logger.critical(f"Failed to connect to Dask or submit Actor: {e}", exc_info=True)
-    # Client and actor future remain None
+    print(f"DEBUG: EXCEPTION during Dask setup: {e}") # <<< ADDED
+    # Reset client/future if setup failed
+    client = None
+    blip_actor_future = None
+
 
 # --- Job Store ---
 jobs = {}
 
 # --- Helper Functions ---
 def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+    return '.' in filename and \
+           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 # --- Dask Actor Definition ---
 # This class definition needs to be available globally in this script
 class BlipCaptionActor(Actor):
-    # Actor __init__ runs ONCE on the worker where the actor is placed
     def __init__(self):
+        # --- ADD VERY EARLY DEBUG PRINTS ---
+        print("ACTOR_DEBUG: Entering BlipCaptionActor.__init__") # Changed prefix
+        # --- END DEBUG PRINTS ---
         # Logging within actor __init__ might go to worker logs
-        print("ACTOR_INFO: Initializing BlipCaptionActor instance...")
-        # Import libraries needed for loading and processing INSIDE __init__
-        import torch
-        from transformers import BlipProcessor, BlipForConditionalGeneration
-        from PIL import Image
-        import io
-        print("ACTOR_INFO: Imports successful.")
-
-        self.device = torch.device("cpu")
+        # actor_log = logging.getLogger('BlipActor') # Use different logger if needed
+        # actor_log.info("Initializing BlipCaptionActor instance...")
         self.model = None
         self.processor = None
-        model_name = "Salesforce/blip-image-captioning-base"
-
+        self.device = None
         try:
+            # --- ADD DEBUG PRINTS AROUND IMPORTS ---
+            print("ACTOR_DEBUG: Importing torch...")
+            import torch
+            print("ACTOR_DEBUG: Importing transformers...")
+            from transformers import BlipProcessor, BlipForConditionalGeneration
+            print("ACTOR_DEBUG: Importing PIL...")
+            from PIL import Image
+            print("ACTOR_DEBUG: Importing io...")
+            import io
+            print("ACTOR_DEBUG: Imports successful.")
+            # --- END DEBUG PRINTS ---
+
+            print("ACTOR_DEBUG: Setting device...")
+            self.device = torch.device("cpu")
+            model_name = "Salesforce/blip-image-captioning-base"
+
             t0 = time.time()
-            print(f"ACTOR_INFO: Loading BLIP Processor: {model_name}")
+            print(f"ACTOR_DEBUG: Loading BLIP Processor: {model_name}")
             self.processor = BlipProcessor.from_pretrained(model_name)
             t1 = time.time()
-            print(f"ACTOR_INFO: Loading BLIP Model: {model_name}")
+            print(f"ACTOR_DEBUG: Loading BLIP Model: {model_name}")
             self.model = BlipForConditionalGeneration.from_pretrained(model_name)
             t2 = time.time()
+            print("ACTOR_DEBUG: Moving model to device...")
             self.model.to(self.device)
+            print("ACTOR_DEBUG: Setting model to eval mode...")
             self.model.eval()
-            print(f"ACTOR_INFO: Model and Processor loaded successfully in {t2-t0:.2f}s (Proc: {t1-t0:.2f}s, Model: {t2-t1:.2f}s). Device: {self.device}")
+            print(f"ACTOR_DEBUG: Model and Processor loaded successfully in {t2-t0:.2f}s (Proc: {t1-t0:.2f}s, Model: {t2-t1:.2f}s). Device: {self.device}")
         except Exception as e:
-            print(f"ACTOR_ERROR: Failed to load model/processor in __init__: {e}\n{traceback.format_exc()}", file=sys.stderr)
-            # Raise exception to potentially signal actor creation failure
+            print(f"ACTOR_CRITICAL: Exception in BlipCaptionActor.__init__: {e}\n{traceback.format_exc()}", file=sys.stderr)
+            # Raise exception to potentially signal actor creation failure earlier
             raise
 
     # Method called remotely via client.submit(actor_future.caption_image, ...)
     def caption_image(self, image_bytes):
         """Generates caption for given image bytes using the loaded model."""
         print("ACTOR_INFO: Received caption_image request.")
-        # Check if model loaded correctly during init
         if self.model is None or self.processor is None:
-             print("ACTOR_ERROR: Model or processor not loaded during init!", file=sys.stderr)
+             print("ACTOR_ERROR: Model or processor not loaded!", file=sys.stderr)
              return "ERROR: Actor not initialized correctly"
 
-        # Import PIL/io again just in case (might not be needed if imported in __init__)
+        # Import PIL/io again just in case
         from PIL import Image
         import io
-        import torch # Needed for torch.no_grad
+        import torch
 
         try:
             print("ACTOR_INFO: Preparing image...")
             raw_image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
-
             print("ACTOR_INFO: Processing image with BlipProcessor...")
             inputs = self.processor(raw_image, return_tensors="pt").to(self.device)
-
             print("ACTOR_INFO: Generating caption...")
-            with torch.no_grad():
-                out = self.model.generate(**inputs, max_length=50, num_beams=4)
-
+            with torch.no_grad(): out = self.model.generate(**inputs, max_length=50, num_beams=4)
             print("ACTOR_INFO: Decoding caption...")
             caption = self.processor.decode(out[0], skip_special_tokens=True)
-
             print(f"ACTOR_INFO: Caption generated successfully: '{caption}'")
             return caption.replace("\n", " ").replace(",", ";").strip()
-
         except Exception as e:
             print(f"ACTOR_ERROR: Error during caption generation: {e}\n{traceback.format_exc()}", file=sys.stderr)
             return f"ERROR: Caption generation failed ({e.__class__.__name__})"
 
-# --- DELETE Old Worker Functions ---
-# del load_blip_and_caption
-# del process_image_bytes
-
 # --- Flask Routes ---
 @app.route('/', methods=['GET'])
 def index():
-    """Display the upload form."""
     return render_template('index.html')
 
 @app.route('/upload', methods=['POST'])
 def upload_files():
-    """Handle file uploads, submit tasks to Dask Actor."""
     job_logger.info(f"Received upload request from {request.remote_addr}")
-
-    # --- Check Dask connection and Actor ---
-    if client is None:
-        job_logger.error("Upload failed: Dask client not connected.")
-        flash('Service error: Dask client unavailable.', 'error'); return redirect(url_for('index'))
-    if blip_actor_future is None or blip_actor_future.status == 'error':
-         job_logger.error(f"Upload failed: Blip Actor not ready or failed. Future: {blip_actor_future}")
-         flash('Service error: Captioning actor unavailable.', 'error'); return redirect(url_for('index'))
-    # --- End Check ---
+    if client is None: job_logger.error("Upload failed: Dask client not connected."); flash('Service error: Dask client unavailable.', 'error'); return redirect(url_for('index'))
+    if blip_actor_future is None: job_logger.error(f"Upload failed: Blip Actor not ready. Future: {blip_actor_future}"); flash('Service error: Captioning actor unavailable.', 'error'); return redirect(url_for('index'))
+    if blip_actor_future.status == 'error': job_logger.error(f"Upload failed: Blip Actor future has status 'error'. Future: {blip_actor_future}"); flash('Service error: Captioning actor failed to initialize.', 'error'); return redirect(url_for('index'))
 
     if 'images' not in request.files: job_logger.warning("Upload failed: No 'images' file part."); flash('No file part in request.', 'error'); return redirect(url_for('index'))
 
-    files = request.files.getlist('images')
-    submitted_futures = []; original_filenames = []; job_id = str(uuid.uuid4())
-    processed_count = 0
+    files = request.files.getlist('images'); submitted_futures = []; original_filenames = []; job_id = str(uuid.uuid4()); processed_count = 0
     job_logger.info(f"JID:{job_id} - Generated Job ID.")
 
     if not files or files[0].filename == '': job_logger.warning(f"JID:{job_id} - Upload failed: No files selected."); flash('No selected files.', 'warning'); return redirect(url_for('index'))
@@ -176,14 +178,9 @@ def upload_files():
             try:
                 image_bytes = file.read()
                 if not image_bytes: job_logger.warning(f"JID:{job_id} - Skipping empty file: {filename}"); flash(f'Skipping empty file: {filename}', 'warning'); continue
-
                 job_logger.debug(f"JID:{job_id} - Submitting task for {filename} to Actor...")
-                # --- Submit to Actor Method ---
-                future = client.submit(blip_actor_future.caption_image, image_bytes, pure=False)
-                # --- End Submit to Actor ---
-                submitted_futures.append(future)
-                original_filenames.append(filename)
-                processed_count += 1
+                future = client.submit(blip_actor_future.caption_image, image_bytes, pure=False) # Submit to actor method
+                submitted_futures.append(future); original_filenames.append(filename); processed_count += 1
             except Exception as e: job_logger.error(f"JID:{job_id} - Error processing/submitting file {filename}: {e}", exc_info=True); flash(f'Error processing file {filename}: {e}', 'error')
         elif file and file.filename != '': job_logger.warning(f"JID:{job_id} - File type not allowed: {file.filename}"); flash(f'File type not allowed: {file.filename}', 'warning')
 
@@ -191,50 +188,36 @@ def upload_files():
 
     jobs[job_id] = {'status': 'processing', 'filenames': original_filenames, 'futures': submitted_futures, 'results': [None] * len(submitted_futures), 'total_tasks': len(submitted_futures), 'completed_tasks': 0}
     job_logger.info(f"JID:{job_id} - Submitted {processed_count} tasks to Actor.")
-
     flash(f'Successfully submitted {processed_count} image(s) for captioning. Job ID: {job_id}', 'success')
     return redirect(url_for('show_results', job_id=job_id))
 
-
 @app.route('/results/<job_id>', methods=['GET'])
 def show_results(job_id):
-    """Display status and results for a given job ID."""
     job_logger.info(f"JID:{job_id} - Request to view results.")
     job_info = jobs.get(job_id)
     if not job_info: job_logger.error(f"JID:{job_id} - Job ID not found."); flash(f'Job ID {job_id} not found.', 'error'); return redirect(url_for('index'))
 
-    progress = 0; num_done = 0; all_accounted_for = True
-    previous_status = job_info['status']
+    progress = 0; num_done = 0; all_accounted_for = True; previous_status = job_info['status']
 
     if job_info.get('futures'):
         futures_to_check = job_info['futures']
         job_logger.debug(f"JID:{job_id} - Checking status of {len(futures_to_check)} futures.")
-        # --- Use wait() for efficient checking ---
-        try:
-             done_set, _ = wait(futures_to_check, timeout=0) # Non-blocking check
-        except Exception as e:
-             job_logger.error(f"JID:{job_id} - Error during wait() check: {e}", exc_info=True)
-             done_set = set() # Proceed without checking if wait fails
+        try: done_set, _ = wait(futures_to_check, timeout=0) # Non-blocking check
+        except Exception as e: job_logger.error(f"JID:{job_id} - Error during wait() check: {e}", exc_info=True); done_set = set()
 
         for i, future in enumerate(futures_to_check):
             if job_info['results'][i] is not None: num_done += 1; continue
-
-            # Check if this future was reported as done by wait()
             if future in done_set:
                 try:
-                    if future.status == 'finished':
-                       job_info['results'][i] = future.result(timeout=1)
-                       num_done += 1
+                    if future.status == 'finished': job_info['results'][i] = future.result(timeout=1); num_done += 1
                     elif future.status == 'error':
                         try: exc = future.exception(timeout=1); job_info['results'][i] = f"ERROR: Task failed - {exc}"; job_logger.error(f"JID:{job_id} - Task for file {job_info['filenames'][i]} failed: {exc}")
                         except Exception as e_inner: job_info['results'][i] = f"ERROR: Failed to get task exception - {e_inner}"; job_logger.error(f"JID:{job_id} - Failed to get exception for failed task {future.key}: {e_inner}")
                         num_done += 1
-                    else: all_accounted_for = False # Should not happen if in done_set
+                    else: all_accounted_for = False
                 except TimeoutError: job_logger.warning(f"JID:{job_id} - Timeout getting result/exception for done future {future.key}"); all_accounted_for = False
                 except Exception as e: job_logger.error(f"JID:{job_id} - Error getting result/exception for done future {future.key}: {e}", exc_info=True); job_info['results'][i] = f"ERROR: Failed to retrieve result/exception - {e}"; num_done += 1
-            else:
-                # Future not in done_set, therefore not finished
-                all_accounted_for = False
+            else: all_accounted_for = False
 
         job_info['completed_tasks'] = num_done
         if all_accounted_for:
@@ -243,7 +226,6 @@ def show_results(job_id):
             if 'futures' in job_info: del job_info['futures']
         else: job_info['status'] = 'processing'
 
-    # Recalculate progress
     if job_info['total_tasks'] > 0: progress = int((job_info.get('completed_tasks', 0) / job_info['total_tasks']) * 100)
     if job_info['status'] == 'complete': progress = 100
 
@@ -253,12 +235,33 @@ def show_results(job_id):
 
 # --- Run the App ---
 if __name__ == '__main__':
-    if client is None: job_logger.critical("Flask app exiting: Dask client connection failed."); sys.exit(1)
-    # Ensure actor was submitted, though it might not be initialized yet
-    if blip_actor_future is None: job_logger.critical("Flask app exiting: BLIP Actor could not be submitted."); sys.exit(1)
-    job_logger.info("Starting Flask app on http://0.0.0.0:5000")
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    print("DEBUG: Entered __main__ block.") # <<< ADDED
+    if client is None:
+        print("DEBUG: Exiting because client is None.") # <<< ADDED
+        job_logger.critical("Flask app exiting: Dask client connection failed on startup.")
+        sys.exit(1) # Ensure sys is imported
+    if blip_actor_future is None:
+        print("DEBUG: Exiting because blip_actor_future is None.") # <<< ADDED
+        # This check might be too early if actor submission is async,
+        # but good for catching immediate submission errors.
+        job_logger.critical("Flask app exiting: BLIP Actor could not be submitted or failed early.")
+        sys.exit(1)
 
+    # Add a check for actor future status if it failed immediately
+    if blip_actor_future.status == 'error':
+        print(f"DEBUG: Exiting because blip_actor_future status is 'error'. Exception: {blip_actor_future.exception()}")
+        job_logger.critical(f"Flask app exiting: BLIP Actor future failed: {blip_actor_future.exception()}")
+        sys.exit(1)
+
+
+    print("DEBUG: Starting Flask app.run()...") # <<< ADDED
+    job_logger.info("Starting Flask app on http://0.0.0.0:5000")
+    # Use threaded=False if you suspect issues with Dask client/futures in multithreaded Flask context
+    app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
+    print("DEBUG: Flask app.run() finished.") # <<< ADDED (won't usually be reached)
+
+else:
+    print("DEBUG: Script is being imported, not run directly.") # <<< ADDED
 
 
 # # Filename: app.py (with Job Logging)
