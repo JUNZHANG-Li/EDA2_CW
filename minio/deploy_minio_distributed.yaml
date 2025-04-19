@@ -27,13 +27,13 @@
     minio_service_group: "minio-user" # Often the same as user for RPMs
 
     # Path to your local environment template file
-    local_env_template: "./templates/minio_env.j2" # Adjust path if needed
+    local_env_template: "./files/minio_env.j2" # Adjust path if needed
 
     # Path to your local service template file (ONLY needed if overriding RPM's default)
     # local_service_template: "./templates/minio.service.j2" # Keep commented out initially
 
   tasks:
-    - name: Ensure essential packages are present (wget, policycoreutils-python-utils for SELinux check)
+    - name: Ensure essential packages are present
       ansible.builtin.package:
         name:
          - wget
@@ -43,7 +43,7 @@
       ignore_errors: yes # Allow failure if package names differ or not needed
 
     # --- Install MinIO via RPM ---
-    - name: Install MinIO from RPM URL (using DNF/YUM module is preferred)
+    - name: Install MinIO from RPM URL
       ansible.builtin.dnf: # Use 'yum' if dnf is not available
         name: "{{ minio_rpm_url }}"
         state: present
@@ -57,7 +57,7 @@
         state: directory
         mode: '0755'
 
-    - name: Configure MinIO environment variables (MINIO_VOLUMES, Credentials, etc.)
+    - name: Configure MinIO environment variables
       ansible.builtin.template:
         src: "{{ local_env_template }}" # Path to your minio_env.j2
         dest: "{{ minio_env_file }}"
