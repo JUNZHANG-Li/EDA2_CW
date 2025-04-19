@@ -1,0 +1,105 @@
+# filename: deploy_minio_distributed.yaml
+---
+- name: Deploy MinIO Server in Distributed Mode on Workers
+  hosts: workers # Target all worker nodes
+  become: true   # Need root privileges
+
+  vars:
+    # MinIO Configuration (Customize as needed)
+    minio_version: "RELEASE.2024-04-18T19-09-18Z" # Find latest stable on min.io website
+    minio_arch: "linux-amd64"
+    minio_download_url: "https://dl.min.io/server/minio/release/{{ minio_arch }}/minio.{{ minio_version }}"
+    minio_binary_path: "/usr/local/bin/minio"
+    minio_data_dir: "/data/minio-data" # Directory on the mounted secondary disk
+
+    # --- SECURITY WARNING ---
+    # Storing secrets directly is insecure. Use Ansible Vault for production.
+    minio_root_user: "minioadmin"
+    minio_root_password: "minioadmin"
+
+    # Path to the local service template file (relative to playbook)
+    # Adjust if you placed it in 'files/' instead of 'templates/'
+    local_service_template: "./templates/minio.service.j2"
+
+  tasks:
+    - name: Ensure essential packages are present (wget)
+      ansible.builtin.package:
+        name: wget
+        state: present
+        update_cache: yes
+
+    # --- Install MinIO Binary ---
+    - name: Check if correct MinIO binary already exists
+      ansible.builtin.stat:
+        path: "{{ minio_binary_path }}"
+      register: minio_binary_stat
+
+    # Simple check based on existence, could add version check if needed
+    - name: Download MinIO Server binary if not present
+      ansible.builtin.get_url:
+        url: "{{ minio_download_url }}"
+        dest: "{{ minio_binary_path }}"
+        mode: '0755' # Make executable directly
+        owner: root
+        group: root
+      when: not minio_binary_stat.stat.exists
+
+    # --- Prepare Storage Directory ---
+    - name: Ensure MinIO data directory exists on /data mount
+      ansible.builtin.file:
+        path: "{{ minio_data_dir }}"
+        state: directory
+        owner: root # Match the user running the service in the template
+        group: root
+        mode: '0700' # Restrict access
+
+    # --- Configure Systemd Service ---
+    - name: Create MinIO systemd service file from template
+      ansible.builtin.template:
+        src: "{{ local_service_template }}"
+        dest: /etc/systemd/system/minio.service
+        owner: root
+        group: root
+        mode: '0644'
+      # Notify handler if template changes (if using handlers)
+      # register: minio_service_file # Register needed if not using handlers
+
+    # --- Start and Enable Service (No Handlers Version) ---
+    - name: Reload systemd daemon to recognize new/changed service file
+      ansible.builtin.systemd:
+        daemon_reload: yes
+      # Only reload if the service file task reported change (more efficient)
+      # when: minio_service_file.changed
+
+    - name: Enable and start the MinIO service
+      ansible.builtin.systemd:
+        name: minio
+        state: started # Ensures it's running
+        enabled: yes   # Ensures it starts on boot
+
+    # Note: A restart might be needed if credentials or server args changed
+    #       but state:started handles initial start. Add explicit restart if needed.
+    # - name: Restart MinIO service (uncomment if needed after config changes)
+    #   ansible.builtin.systemd:
+    #     name: minio
+    #     state: restarted
+
+    - name: Wait briefly for service to initialize across nodes
+      ansible.builtin.pause:
+        seconds: 10
+
+    # --- Verification (Optional but Recommended) ---
+    - name: Check MinIO service status
+      ansible.builtin.command: systemctl is-active minio
+      register: minio_status
+      changed_when: false # This command doesn't change state
+      failed_when: minio_status.rc != 0 # Fail if service is not active
+
+    - name: Display MinIO status and access info
+      ansible.builtin.debug:
+        msg:
+          - "MinIO service is active on {{ inventory_hostname }}."
+          - "Access API/Client via: http://{{ ansible_default_ipv4.address }}:9000"
+          - "Access Console via: http://{{ ansible_default_ipv4.address }}:9001"
+          - "Use User: {{ minio_root_user }} / Pass: [REDACTED]"
+      when: minio_status.rc == 0

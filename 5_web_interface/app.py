@@ -12,12 +12,11 @@ from dask.distributed import Client, Future, wait, TimeoutError
 WEBAPP_BASE_DIR = "/opt/comp0239_coursework/webapp"
 UPLOAD_FOLDER = os.path.join(WEBAPP_BASE_DIR, 'uploads')
 LOG_FILE = os.path.join(WEBAPP_BASE_DIR, 'user_jobs.log')
-ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'} # Corrected gif extension
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 DASK_SCHEDULER = '127.0.0.1:8786'
 
 # --- Job Logger Setup ---
-# (Logger setup remains the same)
 job_logger = logging.getLogger('JobLogger'); job_logger.setLevel(logging.INFO)
 try:
     os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
