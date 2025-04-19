@@ -1,0 +1,78 @@
+---
+- name: Deploy Flask Web Application for Image Captioning
+  hosts: hostnode # Target only the host node
+  become: true    # Needed for package installation and creating dirs in /opt
+
+  vars:
+    # Define base directory for the web application on the remote host
+    webapp_base_dir: "/opt/comp0239_coursework/webapp"
+    # Define subdirectories
+    webapp_templates_dir: "{{ webapp_base_dir }}/templates"
+    webapp_uploads_dir: "{{ webapp_base_dir }}/uploads"
+    # Define the user who should own the files and run the app manually
+    target_user: almalinux # CHANGE THIS if your user is different
+
+    # Define local paths (relative to the playbook file)
+    local_app_script: "./app.py"
+    local_templates_dir: "./files" # Directory containing index.html, results.html
+
+  tasks:
+    - name: Ensure Python pip is installed
+      ansible.builtin.package:
+        name: python3-pip
+        state: present
+        update_cache: yes # Recommended before installing packages
+
+    - name: Install Flask and Dask dependencies for Webapp
+      ansible.builtin.pip:
+        name:
+          - Flask>=2.0      # Or a specific version you tested with
+          - dask[distributed]>=2023.0 # Ensure client libs are on host
+          - werkzeug          # Often needed by Flask
+        state: present
+        executable: pip3 # Use pip for python3
+
+    - name: Create Webapp base and templates directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ target_user }}"
+        group: "{{ target_user }}"
+        mode: '0755' # Read/execute permissions needed
+      loop:
+        - "{{ webapp_base_dir }}"
+        - "{{ webapp_templates_dir }}"
+
+    - name: Create Uploads directory with group write permissions
+      ansible.builtin.file:
+        path: "{{ webapp_uploads_dir }}"
+        state: directory
+        owner: "{{ target_user }}" # Owner
+        group: "{{ target_user }}" # Group
+        # Mode 775: owner(rwx), group(rwx), others(r-x)
+        # Allows the user (or potentially a web server running as the same group) to write
+        mode: '0775'
+
+    - name: Copy Flask application script (app.py)
+      ansible.builtin.copy:
+        src: "{{ local_app_script }}"
+        dest: "{{ webapp_base_dir }}/app.py" # Explicit destination filename
+        owner: "{{ target_user }}"
+        group: "{{ target_user }}"
+        mode: '0755' # Read/Execute for owner/group, Read for others
+
+    - name: Copy HTML templates directory content
+      ansible.builtin.copy:
+        src: "{{ local_templates_dir }}/" # Use trailing slash to copy CONTENTS
+        dest: "{{ webapp_templates_dir }}/" # Destination directory
+        owner: "{{ target_user }}"
+        group: "{{ target_user }}"
+        mode: '0644' # Templates generally only need read access
+
+    - name: Inform user how to run the app
+      ansible.builtin.debug:
+        msg:
+          - "Flask application deployed to {{ webapp_base_dir }} on host {{ inventory_hostname }}."
+          - "Ensure firewall allows port 5000 (e.g., 'sudo ufw allow 5000/tcp'). You might need to add this to your firewall.yaml playbook."
+          - "To run manually: SSH to host node, 'cd {{ webapp_base_dir }}' then 'python3 app.py'"
+          - "Access the web UI via: http://{{ hostvars[inventory_hostname]['ip'] }}:5000 (replace IP if needed)"

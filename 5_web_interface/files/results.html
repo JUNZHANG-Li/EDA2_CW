@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Captioning Results - Job {{ job_id }}</title>
+     <!-- Add auto-refresh ONLY if status is 'processing' -->
+    {% if status == 'processing' %}
+        <meta http-equiv="refresh" content="10"> <!-- Refresh every 10 seconds -->
+    {% endif %}
+    <style>
+      body { font-family: sans-serif; margin: 2em; }
+      table { border-collapse: collapse; width: 100%; margin-top: 1em; }
+      th, td { border: 1px solid #ddd; padding: 8px; text-align: left; vertical-align: top;}
+      th { background-color: #f2f2f2; }
+      .status { font-weight: bold; padding: 0.5em; border-radius: 4px; }
+      .status.processing { background-color: #fff3cd; border: 1px solid #ffeeba;}
+      .status.complete { background-color: #d4edda; border: 1px solid #c3e6cb;}
+      .error-msg { color: red; font-style: italic;}
+    </style>
+  </head>
+  <body>
+    <h1>Results for Job ID: {{ job_id }}</h1>
+    <p>Status: <span class="status {{ status }}">{{ status }}</span></p>
+
+    {% if status == 'processing' %}
+      <p>Results are being generated. This page will automatically refresh every 10 seconds.</p>
+      <p><a href="{{ url_for('show_results', job_id=job_id) }}">Refresh Manually</a></p>
+    {% endif %}
+
+    {% if results %}
+        <h2>Generated Captions:</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Original Filename</th>
+                    <th>Generated Caption / Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for filename, caption in results %}
+                <tr>
+                    <td>{{ filename }}</td>
+                    <td>
+                        {% if caption %}
+                            {% if caption.startswith('ERROR:') %}
+                                <span class="error-msg">{{ caption }}</span>
+                            {% else %}
+                                {{ caption }}
+                            {% endif %}
+                        {% else %}
+                            <em>Processing...</em>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% elif status == 'complete' %}
+        <p>Processing complete, but no results found (this might indicate an issue).</p>
+    {% endif %}
+
+    <hr>
+    <p><a href="{{ url_for('index') }}">Upload More Images</a></p>
+
+  </body>
+</html>

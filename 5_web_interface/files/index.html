@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Image Captioning Service</title>
+    <style>
+      body { font-family: sans-serif; margin: 2em; }
+      .flash { background: #cee5f5; padding: 0.5em; border: 1px solid #aacbe2; margin-bottom: 1em; }
+      .flash.error { background: #f5c7ce; border-color: #e2aacc; }
+      .flash.success { background: #d4edda; border-color: #c3e6cb; }
+      .flash.warning { background: #fff3cd; border-color: #ffeeba; }
+      label { display: block; margin-bottom: 0.5em; }
+      input[type=file] { margin-bottom: 1em; }
+    </style>
+  </head>
+  <body>
+    <h1>Upload Images for Captioning</h1>
+
+    <!-- Flash Messages -->
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="flash {{ category }}">{{ message }}</div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <form method="post" action="{{ url_for('upload_files') }}" enctype="multipart/form-data">
+        <label for="images">Select image files (jpg, jpeg, png, gif):</label>
+        <input type="file" id="images" name="images" multiple required>
+        <br>
+        <button type="submit">Upload and Generate Captions</button>
+    </form>
+
+  </body>
+</html>
