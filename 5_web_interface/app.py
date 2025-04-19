@@ -1,46 +1,69 @@
-# Filename: app.py (with Progress Calculation)
+# Filename: app.py (with Job Logging)
 import os
 import uuid
 import time
 import traceback
 import io
-from flask import Flask, request, render_template, redirect, url_for, flash, jsonify # Add jsonify
+import logging # <<< Import logging
+from flask import Flask, request, render_template, redirect, url_for, flash, jsonify
 from werkzeug.utils import secure_filename
-from dask.distributed import Client, Future, wait, TimeoutError # Removed FIRST_COMPLETED if still there
+from dask.distributed import Client, Future, wait, TimeoutError
 
 # --- Configuration ---
-UPLOAD_FOLDER = '/opt/comp0239_coursework/webapp/uploads'
+WEBAPP_BASE_DIR = "/opt/comp0239_coursework/webapp" # Define base for logs/uploads
+UPLOAD_FOLDER = os.path.join(WEBAPP_BASE_DIR, 'uploads')
+LOG_FILE = os.path.join(WEBAPP_BASE_DIR, 'user_jobs.log') # <<< Define log file path
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 DASK_SCHEDULER = '127.0.0.1:8786'
+
+# --- Job Logger Setup ---
+# Configure a specific logger for job tracking
+job_logger = logging.getLogger('JobLogger')
+job_logger.setLevel(logging.INFO)
+# Prevent job logs from propagating to the root Flask logger if desired
+# job_logger.propagate = False
+try:
+    # Ensure directory exists (though playbook should handle it)
+    os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+    # Create file handler
+    file_handler = logging.FileHandler(LOG_FILE)
+    # Create formatter - include Job ID in the message itself
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    file_handler.setFormatter(formatter)
+    # Add handler to the logger
+    if not job_logger.handlers: # Add handler only once
+         job_logger.addHandler(file_handler)
+except Exception as log_e:
+    print(f"CRITICAL: Failed to configure job logger: {log_e}", file=sys.stderr)
+    traceback.print_exc(file=sys.stderr)
 
 # Flask App Setup
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
-app.secret_key = b'_5#y2L"F4Q8z\n\xec]/' # Keep or change secret key
+app.secret_key = b'_5#y2L"F4Q8z\n\xec]/'
 
 # --- Dask Client ---
 client = None
 try:
-    print(f"Connecting to Dask scheduler at {DASK_SCHEDULER}...")
+    job_logger.info("Attempting to connect to Dask scheduler...")
     client = Client(DASK_SCHEDULER, timeout="10s")
-    print(f"Dask client connected: {client}")
-    print(f"Dashboard Link: {client.dashboard_link}")
+    job_logger.info(f"Dask client connected: {client}")
+    job_logger.info(f"Dask dashboard link: {client.dashboard_link}")
 except Exception as e:
-    print(f"CRITICAL: Failed to connect to Dask scheduler at {DASK_SCHEDULER}. App will not function.", file=sys.stderr)
-    print(traceback.format_exc(), file=sys.stderr)
+    job_logger.critical(f"Failed to connect to Dask scheduler at {DASK_SCHEDULER}. App may not function.", exc_info=True)
+    # Keep client as None
 
 # --- Job Store ---
-jobs = {} # Keep simple in-memory store
+jobs = {}
 
 # --- Helper Functions ---
 def allowed_file(filename):
-    return '.' in filename and \
-           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 # --- Dask Task Functions ---
-# (load_blip_and_caption and process_image_bytes remain unchanged from previous BLIP version)
+# (load_blip_and_caption and process_image_bytes remain unchanged)
 def load_blip_and_caption(image_bytes):
     print("WORKER_INFO: Entering load_blip_and_caption")
     model_name = "Salesforce/blip-image-captioning-base"; processor = None; model = None
@@ -78,111 +101,146 @@ def index():
 @app.route('/upload', methods=['POST'])
 def upload_files():
     """Handle file uploads, submit tasks to Dask."""
-    if client is None: flash('Dask connection error. Cannot process uploads.', 'error'); return redirect(url_for('index'))
-    if 'images' not in request.files: flash('No file part in request.', 'error'); return redirect(url_for('index'))
+    # --- LOGGING: Request received ---
+    job_logger.info(f"Received upload request from {request.remote_addr}")
+
+    if client is None:
+        job_logger.error("Upload failed: Dask client not connected.")
+        flash('Dask connection error. Cannot process uploads.', 'error')
+        return redirect(url_for('index'))
+
+    if 'images' not in request.files:
+        job_logger.warning("Upload failed: No 'images' file part in request.")
+        flash('No file part in request.', 'error')
+        return redirect(url_for('index'))
 
     files = request.files.getlist('images')
-    submitted_futures = []; original_filenames = []; job_id = str(uuid.uuid4())
+    submitted_futures = []; original_filenames = []; job_id = str(uuid.uuid4()) # Generate unique job ID first
     processed_count = 0
 
-    if not files or files[0].filename == '': flash('No selected files.', 'warning'); return redirect(url_for('index'))
+    # --- LOGGING: Job ID Generated ---
+    job_logger.info(f"JID:{job_id} - Generated Job ID.")
+
+    if not files or files[0].filename == '':
+         job_logger.warning(f"JID:{job_id} - Upload failed: No files selected.")
+         flash('No selected files.', 'warning')
+         return redirect(url_for('index'))
 
     for file in files:
         if file and allowed_file(file.filename):
+            filename = secure_filename(file.filename) # Secure filename early
             try:
-                filename = secure_filename(file.filename)
                 image_bytes = file.read()
-                if not image_bytes: flash(f'Skipping empty file: {filename}', 'warning'); continue
-                print(f"Submitting task for {filename}...")
+                if not image_bytes:
+                     job_logger.warning(f"JID:{job_id} - Skipping empty file: {filename}")
+                     flash(f'Skipping empty file: {filename}', 'warning')
+                     continue
+
+                # --- LOGGING: Submitting task ---
+                job_logger.debug(f"JID:{job_id} - Submitting task for {filename}...") # Debug level for individual tasks
                 future = client.submit(process_image_bytes, image_bytes, pure=False)
                 submitted_futures.append(future)
                 original_filenames.append(filename)
                 processed_count += 1
-            except Exception as e: flash(f'Error processing file {file.filename}: {e}', 'error'); print(f"Error submitting task for {file.filename}: {e}"); traceback.print_exc()
-        elif file and file.filename != '': flash(f'File type not allowed: {file.filename}', 'warning')
 
-    if not submitted_futures: flash('No valid image files were processed.', 'error'); return redirect(url_for('index'))
+            except Exception as e:
+                job_logger.error(f"JID:{job_id} - Error processing/submitting file {filename}: {e}", exc_info=True)
+                flash(f'Error processing file {filename}: {e}', 'error')
+                # Continue with other files
 
+        elif file and file.filename != '':
+            job_logger.warning(f"JID:{job_id} - File type not allowed: {file.filename}")
+            flash(f'File type not allowed: {file.filename}', 'warning')
+
+    if not submitted_futures:
+         job_logger.error(f"JID:{job_id} - No valid image files were submitted.")
+         flash('No valid image files were processed.', 'error')
+         return redirect(url_for('index'))
+
+    # Store job information
     jobs[job_id] = {
         'status': 'processing',
         'filenames': original_filenames,
         'futures': submitted_futures,
         'results': [None] * len(submitted_futures),
-        'total_tasks': len(submitted_futures), # Store total count
-        'completed_tasks': 0 # Initialize completed count
+        'total_tasks': len(submitted_futures),
+        'completed_tasks': 0
     }
+    # --- LOGGING: Job Submission Summary ---
+    job_logger.info(f"JID:{job_id} - Submitted {processed_count} tasks to Dask cluster.")
 
     flash(f'Successfully submitted {processed_count} image(s) for captioning. Job ID: {job_id}', 'success')
     return redirect(url_for('show_results', job_id=job_id))
 
+
 @app.route('/results/<job_id>', methods=['GET'])
 def show_results(job_id):
     """Display status and results for a given job ID."""
+    # --- LOGGING: Results page requested ---
+    job_logger.info(f"JID:{job_id} - Request to view results.")
+
     job_info = jobs.get(job_id)
-    if not job_info: flash(f'Job ID {job_id} not found.', 'error'); return redirect(url_for('index'))
+    if not job_info:
+        job_logger.error(f"JID:{job_id} - Job ID not found in store.")
+        flash(f'Job ID {job_id} not found.', 'error')
+        return redirect(url_for('index'))
 
     progress = 0
-    num_done = 0 # Count tasks with stored results/errors
-    all_accounted_for = True # Assume all are done until we find one not
+    num_done = 0
+    all_accounted_for = True
+    previous_status = job_info['status'] # Store previous status
 
-    # Check status of futures if job is still processing or has futures listed
-    if job_info.get('futures'): # Check if futures list exists
+    if job_info.get('futures'):
         futures_to_check = job_info['futures']
+        # --- LOGGING: Checking future status ---
+        job_logger.debug(f"JID:{job_id} - Checking status of {len(futures_to_check)} futures.")
         for i, future in enumerate(futures_to_check):
-            # --- IMPROVED LOGIC ---
-            # Skip if we already have a result for this index
             if job_info['results'][i] is not None:
                 num_done += 1
-                continue # Already processed this one
+                continue
 
-            # Check status without long wait
-            if future.done(): # Check if Dask reports it as done (finished or error)
+            if future.done():
                 try:
                     if future.status == 'finished':
-                       job_info['results'][i] = future.result(timeout=1) # Slightly longer timeout for retrieval
+                       job_info['results'][i] = future.result(timeout=1)
                        num_done += 1
                     elif future.status == 'error':
                         try:
-                            job_info['results'][i] = f"ERROR: Task failed - {future.exception(timeout=1)}" # Get exception
+                            exc = future.exception(timeout=1) # Get exception
+                            job_info['results'][i] = f"ERROR: Task failed - {exc}"
+                            # --- LOGGING: Task Error ---
+                            job_logger.error(f"JID:{job_id} - Task for file {job_info['filenames'][i]} failed: {exc}")
                         except Exception as e_inner:
                             job_info['results'][i] = f"ERROR: Failed to get task exception - {e_inner}"
-                        num_done += 1 # Count errors as 'done' for progress
-                    else:
-                        # Should not happen if future.done() is true, but handle defensively
-                        all_accounted_for = False
+                            job_logger.error(f"JID:{job_id} - Failed to get exception for failed task {future.key}: {e_inner}")
+                        num_done += 1
+                    else: all_accounted_for = False
                 except TimeoutError:
-                    # Getting result timed out even though it was done, try again next time
-                    log.warning(f"Timeout getting result/exception for done future {future.key}, job {job_id}")
+                    job_logger.warning(f"JID:{job_id} - Timeout getting result/exception for done future {future.key}")
                     all_accounted_for = False
                 except Exception as e:
-                     # Failed to get result/exception for other reason
-                    log.error(f"Error getting result/exception for done future {future.key}, job {job_id}: {e}")
-                    job_info['results'][i] = f"ERROR: Failed to retrieve result/exception - {e}"
-                    num_done += 1 # Count as done
-            else:
-                # Future is still pending or running
-                all_accounted_for = False
-            # --- END IMPROVED LOGIC ---
+                     job_logger.error(f"JID:{job_id} - Error getting result/exception for done future {future.key}: {e}", exc_info=True)
+                     job_info['results'][i] = f"ERROR: Failed to retrieve result/exception - {e}"
+                     num_done += 1
+            else: all_accounted_for = False
 
-        # Update overall job status if all futures are accounted for
+        job_info['completed_tasks'] = num_done
         if all_accounted_for:
             job_info['status'] = 'complete'
-            # Optional: Delete futures list now we have all results
-            # del job_info['futures']
+            # --- LOGGING: Job Completed ---
+            if previous_status != 'complete': # Log only on transition
+                 job_logger.info(f"JID:{job_id} - Job marked as complete ({num_done}/{job_info['total_tasks']} tasks finished).")
+            if 'futures' in job_info: del job_info['futures'] # Cleanup
         else:
-             # Keep status as processing if any future isn't finished/processed
              job_info['status'] = 'processing'
 
-
-    # Recalculate progress based on num_done (tasks with results/errors stored)
-    job_info['completed_tasks'] = num_done
+    # Recalculate progress
     if job_info['total_tasks'] > 0:
-        progress = int((num_done / job_info['total_tasks']) * 100)
+        progress = int((job_info.get('completed_tasks', 0) / job_info['total_tasks']) * 100)
+    if job_info['status'] == 'complete': progress = 100
 
-    # If overall status is now complete, ensure progress is 100
-    if job_info['status'] == 'complete':
-         progress = 100
-
+    # --- LOGGING: Results page status update ---
+    job_logger.debug(f"JID:{job_id} - Displaying results. Status: {job_info['status']}, Progress: {progress}%")
 
     results_display = list(zip(job_info['filenames'], job_info['results']))
 
@@ -194,5 +252,8 @@ def show_results(job_id):
 
 # --- Run the App ---
 if __name__ == '__main__':
-    if client is None: print("Cannot start Flask app without Dask connection.", file=sys.stderr); sys.exit(1)
-    print("Starting Flask app on http://0.0.0.0:5000"); app.run(host='0.0.0.0', port=5000, debug=False)
+    if client is None:
+        job_logger.critical("Flask app exiting: Dask client connection failed on startup.")
+        sys.exit(1)
+    job_logger.info("Starting Flask app on http://0.0.0.0:5000")
+    app.run(host='0.0.0.0', port=5000, debug=False)
