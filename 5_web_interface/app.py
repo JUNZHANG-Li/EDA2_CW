@@ -129,27 +129,53 @@ class BlipCaptionActor(Actor):
 # --- Dask Client and Actor Future --- <<< NOW AFTER ACTOR DEFINITION
 client = None
 blip_actor_future = None
-print("DEBUG: Attempting Dask Connection...") # <<< ADDED
+actor_initialized_ok = False # Flag to track successful init
+print("DEBUG: Attempting Dask Connection...")
 try:
     job_logger.info("Attempting to connect to Dask scheduler...")
-    client = Client(DASK_SCHEDULER, timeout="10s") # Shortened timeout for testing startup
+    client = Client(DASK_SCHEDULER, timeout="10s")
     job_logger.info(f"Dask client connected: {client}")
     job_logger.info(f"Dask dashboard link: {client.dashboard_link}")
-    print(f"DEBUG: Dask Client Connected: {client}") # <<< ADDED
+    print(f"DEBUG: Dask Client Connected: {client}")
 
     job_logger.info("Submitting BlipCaptionActor to Dask cluster...")
-    # Now BlipCaptionActor is defined and can be used here
     blip_actor_future = client.submit(BlipCaptionActor, actor=True)
     job_logger.info(f"BlipCaptionActor submission task created. Future: {blip_actor_future}")
-    print(f"DEBUG: Blip Actor Submitted. Future: {blip_actor_future}") # <<< ADDED
+    print(f"DEBUG: Blip Actor Submitted. Future: {blip_actor_future}")
+
+    # --- ADDED: Force Initialization and Check ---
+    job_logger.info("Waiting for Actor to initialize...")
+    print("DEBUG: Waiting for Actor initialization...")
+    try:
+        # Wait for the future to complete (this runs __init__ on worker)
+        # Give it ample time as model loading can be slow
+        wait(blip_actor_future, timeout=120) # Wait up to 120 seconds
+
+        if blip_actor_future.status == 'finished':
+            actor_initialized_ok = True
+            job_logger.info("BlipCaptionActor initialized successfully.")
+            print("DEBUG: Actor initialization successful.")
+        elif blip_actor_future.status == 'error':
+            actor_exception = blip_actor_future.exception()
+            job_logger.critical(f"Blip Actor FAILED initialization: {actor_exception}", exc_info=actor_exception)
+            print(f"DEBUG: Actor FAILED initialization: {actor_exception}")
+        else: # Should not happen if wait() returns without timeout, but handle defensively
+             job_logger.warning(f"Blip Actor initialization status unclear after wait: {blip_actor_future.status}")
+             print(f"DEBUG: Actor initialization status unclear: {blip_actor_future.status}")
+
+    except TimeoutError:
+         job_logger.critical("Timeout waiting for Blip Actor to initialize. Worker might be overloaded or __init__ failed.")
+         print("DEBUG: Timeout waiting for Actor initialization.")
+    except Exception as init_e:
+         job_logger.critical(f"Exception during Blip Actor initialization wait: {init_e}", exc_info=True)
+         print(f"DEBUG: Exception during Actor initialization wait: {init_e}")
+    # --- END ADDED ---
 
 except Exception as e:
     job_logger.critical(f"Failed to connect to Dask or submit Actor: {e}", exc_info=True)
-    print(f"DEBUG: EXCEPTION during Dask setup: {e}") # <<< ADDED
-    # Reset client/future if setup failed
+    print(f"DEBUG: EXCEPTION during Dask setup: {e}")
     client = None
     blip_actor_future = None
-
 
 # --- Job Store ---
 jobs = {}
@@ -275,40 +301,22 @@ def show_results(job_id):
 
 # --- Run the App ---
 if __name__ == '__main__':
-    print("DEBUG: Entered __main__ block.") # <<< ADDED
+    print("DEBUG: Entered __main__ block.")
     if client is None:
-        print("DEBUG: Exiting because client is None.") # <<< ADDED
+        print("DEBUG: Exiting because client is None.")
         job_logger.critical("Flask app exiting: Dask client connection failed on startup.")
-        sys.exit(1) # Ensure sys is imported
-    if blip_actor_future is None:
-        print("DEBUG: Exiting because blip_actor_future is None.") # <<< ADDED
-        job_logger.critical("Flask app exiting: BLIP Actor could not be submitted or failed early.")
         sys.exit(1)
+    # --- UPDATED Check: Check the flag ---
+    if not actor_initialized_ok:
+        print("DEBUG: Exiting because Blip Actor did not initialize successfully.")
+        job_logger.critical("Flask app exiting: BLIP Actor failed to initialize.")
+        sys.exit(1)
+    # --- END UPDATED Check ---
 
-    # Add a check for actor future status if it failed immediately after submission attempt
-    # Need a brief wait or check if future completed with error quickly
-    try:
-        actor_status = blip_actor_future.status # Check status without waiting long
-        print(f"DEBUG: Actor future status on startup: {actor_status}")
-        if actor_status == 'error':
-             actor_exception = blip_actor_future.exception(timeout=1) # Try to get exception
-             print(f"DEBUG: Exiting because blip_actor_future status is 'error'. Exception: {actor_exception}")
-             job_logger.critical(f"Flask app exiting: BLIP Actor future failed on submission: {actor_exception}")
-             sys.exit(1)
-    except Exception as actor_check_e:
-         print(f"DEBUG: Could not check actor future status on startup: {actor_check_e}")
-         job_logger.warning(f"Could not definitively check actor status on startup: {actor_check_e}")
-         # Decide whether to proceed or exit? Proceeding cautiously.
-
-    print("DEBUG: Starting Flask app.run()...") # <<< ADDED
+    print("DEBUG: Starting Flask app.run()...")
     job_logger.info("Starting Flask app on http://0.0.0.0:5000")
-    # Use threaded=False if you suspect issues with Dask client/futures in multithreaded Flask context
-    # Set threaded=True generally for better responsiveness if not causing issues
     app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
-    print("DEBUG: Flask app.run() finished.") # <<< ADDED (won't usually be reached)
-
-else:
-    print("DEBUG: Script is being imported, not run directly.") # <<< ADDED
+    print("DEBUG: Flask app.run() finished.")
 
 
 # # Filename: app.py (with Job Logging)
