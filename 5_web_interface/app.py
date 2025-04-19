@@ -4,7 +4,6 @@ import uuid
 import time
 import traceback
 import io
-import sys
 import logging # <<< Import logging
 from flask import Flask, request, render_template, redirect, url_for, flash, jsonify
 from werkzeug.utils import secure_filename
@@ -64,67 +63,26 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 # --- Dask Task Functions ---
-# --- Model Loading and Captioning Function (Runs on Worker) ---
 def load_blip_and_caption(image_bytes):
-    """Loads BLIP model and generates caption INSIDE the task function."""
-    # Using print for worker logs as logging setup is complex inside tasks
     print("WORKER_INFO: Entering load_blip_and_caption")
     model_name = "Salesforce/blip-image-captioning-base"; processor = None; model = None
-    start_func_time = time.time() # Time the whole function entry
-
     try:
         print(f"WORKER_INFO: Importing transformers/torch/PIL within task...")
         import torch; from transformers import BlipProcessor, BlipForConditionalGeneration; from PIL import Image; import io
-        import time # Ensure time is imported within task scope if needed
         print("WORKER_INFO: Imports successful inside task.")
-
-        # --- Added Timing ---
-        t_load_start = time.time()
-        print(f"WORKER_INFO: Loading BLIP Processor: {model_name}")
-        processor = BlipProcessor.from_pretrained(model_name)
-        t_processor_loaded = time.time()
-        print(f"WORKER_INFO: Loading BLIP Model: {model_name}")
-        model = BlipForConditionalGeneration.from_pretrained(model_name)
-        t_model_loaded = time.time()
-        # --- End Added Timing ---
-
+        print(f"WORKER_INFO: Loading BLIP Processor: {model_name}"); processor = BlipProcessor.from_pretrained(model_name)
+        print(f"WORKER_INFO: Loading BLIP Model: {model_name}"); model = BlipForConditionalGeneration.from_pretrained(model_name)
         device = torch.device("cpu"); model.to(device); model.eval()
-        t_model_ready = time.time()
         print("WORKER_INFO: BLIP Processor and Model loaded successfully.")
-        # --- Log Loading Times ---
-        print(f"WORKER_TIMING: Processor load: {t_processor_loaded - t_load_start:.3f}s")
-        print(f"WORKER_TIMING: Model load: {t_model_loaded - t_processor_loaded:.3f}s")
-        print(f"WORKER_TIMING: Model setup (to_device/eval): {t_model_ready - t_model_loaded:.3f}s")
-        print(f"WORKER_TIMING: Total load/setup time: {t_model_ready - t_load_start:.3f}s")
-        # --- End Timing Log ---
-
         print("WORKER_INFO: Preparing image..."); raw_image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
         print("WORKER_INFO: Processing image with BlipProcessor..."); inputs = processor(raw_image, return_tensors="pt").to(device)
-        t_processed = time.time()
-
         print("WORKER_INFO: Generating caption (max_length=50)...")
         with torch.no_grad(): out = model.generate(**inputs, max_length=50, num_beams=4)
-        t_generated = time.time()
-
         print("WORKER_INFO: Decoding caption..."); caption = processor.decode(out[0], skip_special_tokens=True)
-        t_decoded = time.time()
-
         print(f"WORKER_INFO: Caption generated successfully: '{caption}'")
-        # --- Log Inference Timing ---
-        print(f"WORKER_TIMING: Image processing (processor call): {t_processed - t_model_ready:.3f}s")
-        print(f"WORKER_TIMING: Caption generation (model.generate): {t_generated - t_processed:.3f}s")
-        print(f"WORKER_TIMING: Decoding: {t_decoded - t_generated:.3f}s")
-        # --- End Inference Timing ---
-
         return caption.replace("\n", " ").replace(",", ";").strip()
-    except Exception as e:
-        end_func_time_error = time.time()
-        print(f"WORKER_ERROR in load_blip_and_caption after {end_func_time_error - start_func_time:.3f}s: {e}\n{traceback.format_exc()}", file=sys.stderr)
-        return f"ERROR_CAPTION_FAILED_{e.__class__.__name__}"
-    finally:
-        del processor; del model
-        end_func_time = time.time()
-        print(f"WORKER_INFO: Exiting load_blip_and_caption. Total time in function: {end_func_time - start_func_time:.3f}s")
+    except Exception as e: print(f"WORKER_ERROR in load_blip_and_caption: {e}\n{traceback.format_exc()}", file=sys.stderr); return f"ERROR: Caption generation failed ({e.__class__.__name__})"
+    finally: del processor; del model
 
 def process_image_bytes(image_bytes):
     t_start = time.time()
