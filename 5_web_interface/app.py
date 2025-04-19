@@ -122,17 +122,14 @@ try:
     job_logger.info("Waiting for Actor to initialize...")
     print("DEBUG: Waiting for Actor initialization...")
     try:
-        wait(blip_actor_future, timeout=120) # Wait for __init__ to run
+        # Wait for the future to complete (this runs __init__ on worker)
+        wait(blip_actor_future, timeout=120) # Wait up to 120 seconds
 
         if blip_actor_future.status == 'finished':
-             # --- ADDED: Explicitly get actor and call check_ready ---
-             print("DEBUG: Actor future finished. Getting actor reference...")
-             # Note: .result() here might block again briefly if state transfer is needed
-             # blip_actor_instance = blip_actor_future.result(timeout=10) # Get the ActorProxy object
-             # print(f"DEBUG: Got actor reference: {blip_actor_instance}. Submitting check_ready...")
-             # check_future = client.submit(blip_actor_instance.check_ready) # Call check method via proxy
-             # Alternative submission for check_ready using the future directly
-             check_future = client.submit(blip_actor_future.check_ready)
+             # --- CORRECTED: Explicitly call check_ready method via client.submit ---
+             print("DEBUG: Actor future finished. Submitting check_ready...")
+             # Submit the CLASS METHOD, passing the actor future as the implicit 'self'
+             check_future = client.submit(BlipCaptionActor.check_ready, blip_actor_future)
              is_ready = check_future.result(timeout=30) # Wait for check result
              print(f"DEBUG: check_ready() returned: {is_ready}")
              if is_ready:
@@ -140,14 +137,23 @@ try:
                  job_logger.info("BlipCaptionActor initialized and checked successfully.")
                  print("DEBUG: Actor initialization and check successful.")
              else:
-                  job_logger.critical("Blip Actor check_ready() returned False. Initialization likely incomplete.")
+                  job_logger.critical("Blip Actor check_ready() returned False. Initialization likely incomplete or failed check.")
                   print("DEBUG: Actor check_ready() returned False.")
-             # --- END ADDED CHECK ---
-        elif blip_actor_future.status == 'error': # Handle init failure
-            actor_exception = blip_actor_future.exception(); job_logger.critical(f"Blip Actor FAILED initialization: {actor_exception}", exc_info=actor_exception); print(f"DEBUG: Actor FAILED initialization: {actor_exception}")
-        else: job_logger.warning(f"Blip Actor initialization status unclear after wait: {blip_actor_future.status}"); print(f"DEBUG: Actor initialization status unclear: {blip_actor_future.status}")
-    except TimeoutError: job_logger.critical("Timeout waiting for Blip Actor to initialize."); print("DEBUG: Timeout waiting for Actor initialization.")
-    except Exception as init_e: job_logger.critical(f"Exception during Blip Actor initialization wait/check: {init_e}", exc_info=True); print(f"DEBUG: Exception during Actor initialization wait/check: {init_e}")
+             # --- END CORRECTION ---
+        elif blip_actor_future.status == 'error': # Handle init failure reported by wait()
+            actor_exception = blip_actor_future.exception()
+            job_logger.critical(f"Blip Actor FAILED initialization: {actor_exception}", exc_info=actor_exception)
+            print(f"DEBUG: Actor FAILED initialization: {actor_exception}")
+        else: # Should not happen if wait() returns without timeout, but handle defensively
+             job_logger.warning(f"Blip Actor initialization status unclear after wait: {blip_actor_future.status}")
+             print(f"DEBUG: Actor initialization status unclear: {blip_actor_future.status}")
+
+    except TimeoutError:
+         job_logger.critical("Timeout waiting for Blip Actor to initialize. Worker might be overloaded or __init__ failed.")
+         print("DEBUG: Timeout waiting for Actor initialization.")
+    except Exception as init_e:
+         job_logger.critical(f"Exception during Blip Actor initialization wait/check: {init_e}", exc_info=True)
+         print(f"DEBUG: Exception during Actor initialization wait/check: {init_e}")
 
 except Exception as e: job_logger.critical(f"Failed to connect to Dask or submit Actor: {e}", exc_info=True); print(f"DEBUG: EXCEPTION during Dask setup: {e}"); client = None; blip_actor_future = None
 
