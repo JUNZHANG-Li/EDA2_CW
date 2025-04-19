@@ -17,10 +17,11 @@ WorkingDirectory={{ webapp_base_dir }}
 # --workers: number of worker processes (start with 1 or 2, adjust based on load)
 # --bind: the host and port Gunicorn should listen on
 # --timeout: worker timeout (increase if tasks take long, BLIP can be slow)
-# --limit-request-body: max size of request body in bytes. Set this > 12MB (e.g., 100MB = 104857600).
-#                       0 means no limit, but a reasonable limit is recommended.
+# NOTE: Gunicorn does NOT have a --limit-request-body option like Werkzeug's MAX_CONTENT_LENGTH.
+# Flask's MAX_CONTENT_LENGTH check will happen within the app as the body is read by Werkzeug.
+# If a 413 error still occurs, it is likely enforced by a reverse proxy (Nginx/Apache) in front of Gunicorn.
 # app:app: Tells Gunicorn to find the Flask application instance 'app' in 'app.py'
-ExecStart=gunicorn --workers 2 --bind 0.0.0.0:5000 --timeout 120 --limit-request-body 104857600 app:app
+ExecStart=gunicorn --workers 2 --bind 0.0.0.0:5000 --timeout 120 app:app
 
 # Restart the service if it fails
 Restart=always
