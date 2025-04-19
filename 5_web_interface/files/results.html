@@ -5,25 +5,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Captioning Results - Job {{ job_id }}</title>
     {% if status == 'processing' %}
-        <meta http-equiv="refresh" content="5">
+        <meta http-equiv="refresh" content="5"> <!-- Refresh slightly faster: 5 seconds -->
     {% endif %}
     <style>
       body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; margin: 2em; background-color: #f8f9fa; }
       .container { background-color: #ffffff; padding: 2em; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); max-width: 900px; margin: auto; }
       h1, h2 { color: #333; font-weight: 500; }
       table { border-collapse: collapse; width: 100%; margin-top: 1.5em; margin-bottom: 1.5em;}
-      /* Remove bottom border from main rows */
-      table#results-table > tbody > tr.image-row > td { border-bottom: none; }
       th, td { border: 1px solid #dee2e6; padding: 10px 12px; text-align: left; vertical-align: top;}
       th { background-color: #e9ecef; font-weight: 600; }
-      .status-label { font-weight: bold; padding: 0.3em 0.6em; border-radius: 4px; display: inline-block; font-size: 0.9em;}
-      .status-label.processing, .status-label.running, .status-label.finishing { background-color: #cfe2ff; border: 1px solid #b6d4fe; color: #0a58ca;}
-      .status-label.pending, .status-label.queued, .status-label.submitted { background-color: #fff3cd; border: 1px solid #ffeeba; color: #856404;}
-      .status-label.complete, .status-label.finished { background-color: #d4edda; border: 1px solid #c3e6cb; color: #155724;}
-      .status-label.error, .status-label.failed { background: #f8d7da; border-color: #f5c6cb; color: #721c24; }
-      .status-label.unknown, .status-label.unknown_done { background: #e2e3e5; border-color: #d3d6d8; color: #41464b;}
-
-      .caption-text { font-family: serif; }
+      .status { font-weight: bold; padding: 0.5em 1em; border-radius: 4px; display: inline-block; }
+      .status.processing { background-color: #fff3cd; border: 1px solid #ffeeba; color: #856404;}
+      .status.complete { background-color: #d4edda; border: 1px solid #c3e6cb; color: #155724;}
+      .status.error { background: #f8d7da; border-color: #f5c6cb; color: #721c24; }
       .error-msg { color: #dc3545; font-style: italic;}
       a { color: #007bff; text-decoration: none; }
       a:hover { text-decoration: underline; }
@@ -31,175 +25,65 @@
 
       /* Progress Bar Styles */
       .progress-container { width: 100%; background-color: #e9ecef; border-radius: 4px; margin-bottom: 1em; height: 25px; position: relative; overflow: hidden; }
-      .progress-bar { background-color: #0d6efd; height: 100%; transition: width 0.4s ease; text-align: center; line-height: 25px; color: white; font-weight: bold; }
-      .progress-bar.complete { background-color: #198754; }
-      .progress-bar.error { background-color: #dc3545; }
-      #overall-status { font-weight: bold; margin-bottom: 1em; }
+      .progress-bar { width: {{ progress }}%; background-color: #28a745; height: 100%; transition: width 0.4s ease; text-align: center; line-height: 25px; color: white; font-weight: bold; }
+      .progress-bar.processing { background-color: #007bff; } /* Blue while processing */
+      .progress-bar.error { background-color: #dc3545; } /* Red if overall status is error */
 
-      /* Styles for Details Row */
-      .details-row td {
-          padding: 8px 12px 10px 30px; /* Indent details */
-          font-size: 0.9em;
-          color: #555;
-          background-color: #f9f9f9;
-          border-top: 1px dashed #ccc !important; /* Ensure top border is visible */
-      }
-       .details-row td code { background-color: #e9ecef; padding: 2px 4px; border-radius: 3px; font-family: monospace;}
     </style>
   </head>
   <body>
     <div class="container">
-        <h1>Results for Job ID: <span id="job-id">{{ job_id }}</span></h1>
-        <p id="overall-status">Status: Loading...</p>
+        <h1>Results for Job ID: {{ job_id }}</h1>
+        <p>Status: <span class="status {{ status }}">{{ status }}</span></p>
 
         <!-- Progress Bar Section -->
         <div class="progress-container">
-             <div id="progress-bar" class="progress-bar" style="width: 0%;">
-                 <span id="progress-percent">0</span>%
+             <div class="progress-bar {{ status }}" style="width: {{ progress }}%;">
+                 {{ progress }}%
             </div>
         </div>
         <!-- End Progress Bar Section -->
 
-        <h2>Image Details:</h2>
-        <table id="results-table">
-            <thead>
-                <tr>
-                    <th>Filename</th>
-                    <th>Status</th>
-                    <th>Caption / Result</th>
-                </tr>
-            </thead>
-            <tbody id="results-table-body">
-                <!-- Initial rows rendered by Flask, will be updated by JS -->
-                {% for filename in initial_filenames %}
-                <!-- Main Row -->
-                <tr class="image-row" id="row-{{ loop.index0 }}">
-                    <td id="filename-{{ loop.index0 }}">{{ filename }}</td>
-                    <td id="status-{{ loop.index0 }}"><span class="status-label queued">Queued</span></td>
-                    <td id="result-{{ loop.index0 }}"><em>Waiting...</em></td>
-                </tr>
-                <!-- Details Row (Initially may have default content or be populated by JS) -->
-                <tr class="details-row" id="details-row-{{ loop.index0 }}">
-                     <td colspan="3" id="details-{{ loop.index0 }}">
-                        Submitted: <code>N/A</code> | Finished: <code>N/A</code> | Duration: <code>N/A</code>
-                     </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+
+        {% if status == 'processing' %}
+          <p>Results are being generated. This page will automatically refresh every 5 seconds.</p>
+          <p><a href="{{ url_for('show_results', job_id=job_id) }}">Refresh Manually</a></p>
+        {% endif %}
+
+        {% if results %}
+            <h2>Generated Captions:</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Original Filename</th>
+                        <th>Generated Caption / Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for filename, caption in results %}
+                    <tr>
+                        <td>{{ filename }}</td>
+                        <td>
+                            {% if caption %}
+                                {% if caption.startswith('ERROR:') %}
+                                    <span class="error-msg">{{ caption }}</span>
+                                {% else %}
+                                    {{ caption }}
+                                {% endif %}
+                            {% else %}
+                                <em>Processing...</em>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% elif status == 'complete' %}
+            <p>Processing complete.</p> <!-- Simple message -->
+        {% endif %}
 
         <hr>
         <p><a href="{{ url_for('index') }}">Upload More Images</a></p>
     </div>
-
-    <!-- JavaScript for Polling -->
-    <script>
-        const jobId = document.getElementById('job-id').textContent;
-        let intervalId = null;
-
-        function formatEpoch(epochSeconds) {
-            if (!epochSeconds || epochSeconds === "N/A") return "N/A";
-            try {
-                // Convert "N/A" or potentially invalid strings explicitly
-                const epochFloat = parseFloat(epochSeconds);
-                if (isNaN(epochFloat)) return "Invalid Time";
-                const date = new Date(epochFloat * 1000);
-                // Check if date is valid after creation
-                if (isNaN(date.getTime())) return "Invalid Date";
-                return date.toLocaleString(); // Adjust format as needed
-            } catch (e) {
-                console.error("Error formatting time:", e);
-                return "Format Error";
-            }
-        }
-
-
-        function updateStatus() {
-            fetch(`/job_status/${jobId}`)
-                .then(response => response.ok ? response.json() : Promise.reject(`HTTP error ${response.status}`))
-                .then(data => {
-                    if (data.error) {
-                         console.error("Error fetching status:", data.error);
-                         document.getElementById('overall-status').textContent = `Status: Error - ${data.error}`;
-                         if (intervalId) clearInterval(intervalId);
-                         return;
-                    }
-
-                    // Update Overall Status & Progress Bar
-                    document.getElementById('overall-status').textContent = `Status: ${data.overall_status}`;
-                    const progressBar = document.getElementById('progress-bar');
-                    progressBar.style.width = data.progress_percent + '%';
-                    document.getElementById('progress-percent').textContent = data.progress_percent;
-                    progressBar.className = `progress-bar ${data.overall_status}`;
-
-                    // Update individual image rows and details
-                    const tableBody = document.getElementById('results-table-body');
-                    // Assuming two rows per image now (main + details)
-                    if (data.image_statuses.length !== (tableBody.rows.length / 2)) {
-                         console.warn("Mismatch between API data and table rows.");
-                    }
-
-                    data.image_statuses.forEach((item, index) => {
-                        const statusCell = document.getElementById(`status-${index}`);
-                        const resultCell = document.getElementById(`result-${index}`);
-                        const detailsCell = document.getElementById(`details-${index}`); // Get the details cell
-
-                        // Update Status Label
-                        if (statusCell) {
-                             let statusClass = item.status ? item.status.toLowerCase() : 'unknown';
-                             let statusText = item.status ? item.status.charAt(0).toUpperCase() + item.status.slice(1) : 'Unknown';
-                             if (statusClass === 'pending') { statusClass = 'queued'; statusText = 'Queued';}
-                             if (statusClass === 'running') { statusClass = 'processing'; statusText = 'Processing';}
-                             if (statusClass === 'finished') { statusClass = 'complete'; statusText = 'Complete';}
-                             if (statusClass === 'failed') { statusClass = 'error'; statusText = 'Error';}
-                             statusCell.innerHTML = `<span class="status-label ${statusClass}">${statusText}</span>`;
-                        }
-
-                        // Update Result/Caption Cell
-                        if (resultCell) {
-                             let resultHTML = '<em>Waiting...</em>'; // Default for ongoing tasks
-                             // --- CORRECTED LOGIC: Display result if status indicates completion or error ---
-                             if (item.status === 'complete' || item.status === 'finished' || item.status === 'error' || item.status === 'failed') {
-                                 if (item.result) {
-                                     if (String(item.result).startsWith('ERROR:')) {
-                                         resultHTML = `<span class="error-msg">${item.result}</span>`;
-                                     } else {
-                                         resultHTML = `<span class="caption-text">${item.result}</span>`;
-                                     }
-                                 } else {
-                                     // Task is done/errored but no result string? Should not happen often.
-                                     resultHTML = '<em>Result Unavailable</em>';
-                                 }
-                             }
-                             resultCell.innerHTML = resultHTML;
-                         }
-
-                        // Update Details Cell (in the separate details row)
-                        if (detailsCell) {
-                             detailsCell.innerHTML = `
-                                 Submitted: <code>${formatEpoch(item.submit_time_str)}</code> |
-                                 Finished: <code>${formatEpoch(item.end_time_str)}</code> |
-                                 Duration: <code>${item.duration_str}</code>
-                             `;
-                        }
-                    });
-
-                    // Stop polling if job is complete or errored
-                    if (data.overall_status === 'complete' || data.overall_status === 'error') {
-                        if (intervalId) { console.log("Job finished or errored. Stopping polling."); clearInterval(intervalId); intervalId = null; }
-                    }
-                })
-                .catch(error => {
-                    console.error('Error fetching job status:', error);
-                    document.getElementById('overall-status').textContent = 'Status: Error fetching updates';
-                });
-        }
-
-        // Start polling
-        intervalId = setInterval(updateStatus, 3000);
-        updateStatus(); // Initial call
-
-    </script>
-
   </body>
 </html>
