@@ -57,14 +57,17 @@
         mode: '0644'
       notify: Reload systemd
 
-    - name: Ensure webapp service is enabled (starts on boot) and started
+    - name: Reload systemd daemon
+      ansible.builtin.systemd:
+        daemon_reload: yes
+
+    - name: Ensure webapp service is enabled and started
       ansible.builtin.systemd:
         name: webapp
         state: started
         enabled: yes
-        daemon_reload: yes
 
-    - name: Reload systemd
+    - name: Restart webapp service
       ansible.builtin.systemd:
-        daemon_reload: yes
-      listen: Reload systemd
+        name: webapp
+        state: restarted
