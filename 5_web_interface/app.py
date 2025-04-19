@@ -1,198 +1,214 @@
-# Filename: app.py (with Progress Calculation)
-import os
-import uuid
+# --- Inside app.py ---
+import logging
 import time
-import traceback
-import io
-from flask import Flask, request, render_template, redirect, url_for, flash, jsonify # Add jsonify
-from werkzeug.utils import secure_filename
-from dask.distributed import Client, Future, wait, TimeoutError # Removed FIRST_COMPLETED if still there
+# ... other imports ...
 
 # --- Configuration ---
-UPLOAD_FOLDER = '/opt/comp0239_coursework/webapp/uploads'
-ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-DASK_SCHEDULER = '127.0.0.1:8786'
+# ... (UPLOAD_FOLDER, ALLOWED_EXTENSIONS, DASK_SCHEDULER) ...
+HOST_LOG_FILE = '/opt/comp0239_coursework/webapp/host_timing.log' # Specific log file
 
 # Flask App Setup
-app = Flask(__name__)
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
-app.secret_key = b'_5#y2L"F4Q8z\n\xec]/' # Keep or change secret key
+# ... (app creation, config, secret_key) ...
+
+# --- Specific Timing Logger Setup ---
+# Remove basicConfig if you used it before, configure root logger or specific loggers
+timing_log = logging.getLogger('WebAppTiming')
+timing_log.setLevel(logging.INFO) # Or DEBUG for more verbosity
+# Ensure handlers aren't added multiple times if app reloads
+if not timing_log.handlers:
+    # File Handler for timing logs
+    file_handler = logging.FileHandler(HOST_LOG_FILE)
+    file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    file_handler.setFormatter(file_formatter)
+    timing_log.addHandler(file_handler)
+    # Optional: Console Handler as well
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(file_formatter)
+    timing_log.addHandler(console_handler)
 
 # --- Dask Client ---
-client = None
-try:
-    print(f"Connecting to Dask scheduler at {DASK_SCHEDULER}...")
-    client = Client(DASK_SCHEDULER, timeout="10s")
-    print(f"Dask client connected: {client}")
-    print(f"Dashboard Link: {client.dashboard_link}")
-except Exception as e:
-    print(f"CRITICAL: Failed to connect to Dask scheduler at {DASK_SCHEDULER}. App will not function.", file=sys.stderr)
-    print(traceback.format_exc(), file=sys.stderr)
+# ... (Connect client as before) ...
 
 # --- Job Store ---
-jobs = {} # Keep simple in-memory store
-
-# --- Helper Functions ---
-def allowed_file(filename):
-    return '.' in filename and \
-           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+# Add fields to store timestamps
+# jobs[job_id] = {...,
+#                 'timestamps': {'received': None, 'submitted': None, 'results_checked': [], 'complete': None},
+#                 'task_times': [None] * len(...) # Optional: Store worker times
+#                }
+jobs = {}
 
 # --- Dask Task Functions ---
-# (load_blip_and_caption and process_image_bytes remain unchanged from previous BLIP version)
-def load_blip_and_caption(image_bytes):
-    print("WORKER_INFO: Entering load_blip_and_caption")
-    model_name = "Salesforce/blip-image-captioning-base"; processor = None; model = None
-    try:
-        print(f"WORKER_INFO: Importing transformers/torch/PIL within task...")
-        import torch; from transformers import BlipProcessor, BlipForConditionalGeneration; from PIL import Image; import io
-        print("WORKER_INFO: Imports successful inside task.")
-        print(f"WORKER_INFO: Loading BLIP Processor: {model_name}"); processor = BlipProcessor.from_pretrained(model_name)
-        print(f"WORKER_INFO: Loading BLIP Model: {model_name}"); model = BlipForConditionalGeneration.from_pretrained(model_name)
-        device = torch.device("cpu"); model.to(device); model.eval()
-        print("WORKER_INFO: BLIP Processor and Model loaded successfully.")
-        print("WORKER_INFO: Preparing image..."); raw_image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
-        print("WORKER_INFO: Processing image with BlipProcessor..."); inputs = processor(raw_image, return_tensors="pt").to(device)
-        print("WORKER_INFO: Generating caption (max_length=50)...")
-        with torch.no_grad(): out = model.generate(**inputs, max_length=50, num_beams=4)
-        print("WORKER_INFO: Decoding caption..."); caption = processor.decode(out[0], skip_special_tokens=True)
-        print(f"WORKER_INFO: Caption generated successfully: '{caption}'")
-        return caption.replace("\n", " ").replace(",", ";").strip()
-    except Exception as e: print(f"WORKER_ERROR in load_blip_and_caption: {e}\n{traceback.format_exc()}", file=sys.stderr); return f"ERROR: Caption generation failed ({e.__class__.__name__})"
-    finally: del processor; del model
-
+# Modify task to return timing info (optional)
 def process_image_bytes(image_bytes):
-    t_start = time.time()
-    if not image_bytes: print("WORKER_ERROR: Received empty image bytes.", file=sys.stderr); return "ERROR: Empty image data received"
-    try: return load_blip_and_caption(image_bytes)
-    except Exception as e: print(f"WORKER_ERROR in process_image_bytes wrapper: {e}\n{traceback.format_exc()}", file=sys.stderr); return f"ERROR: Processing wrapper failed ({e.__class__.__name__})"
+    """
+    Wrapper task that takes image bytes, calls captioning, AND returns timing.
+    Returns tuple: (caption_or_error, duration_on_worker)
+    """
+    task_start_time = time.time()
+    result = "ERROR: Task failed before processing" # Default
+    try:
+        if not image_bytes:
+            print("WORKER_ERROR: Received empty image bytes.", file=sys.stderr)
+            result = "ERROR: Empty image data received"
+        else:
+            result = load_blip_and_caption(image_bytes) # Call the captioning func
+    except Exception as e:
+        result = f"ERROR: Processing wrapper failed ({e.__class__.__name__})"
+        print(f"WORKER_ERROR in process_image_bytes wrapper: {e}\n{traceback.format_exc()}", file=sys.stderr)
+    finally:
+        task_end_time = time.time()
+        duration = task_end_time - task_start_time
+        print(f"WORKER_INFO: process_image_bytes took {duration:.4f}s")
+        # Return both the original result and the duration
+        return (result, duration)
 
+# (load_blip_and_caption remains the same internally, still prints to worker log)
 
 # --- Flask Routes ---
 @app.route('/', methods=['GET'])
 def index():
-    """Display the upload form."""
+    # (No changes needed here)
     return render_template('index.html')
 
 @app.route('/upload', methods=['POST'])
 def upload_files():
-    """Handle file uploads, submit tasks to Dask."""
-    if client is None: flash('Dask connection error. Cannot process uploads.', 'error'); return redirect(url_for('index'))
-    if 'images' not in request.files: flash('No file part in request.', 'error'); return redirect(url_for('index'))
+    """Handle file uploads, submit tasks to Dask, log timing."""
+    request_received_time = time.time() # Time request handling starts
+    if client is None: flash('Dask connection error...', 'error'); return redirect(url_for('index'))
+    # (File checking logic - same as before) ...
 
     files = request.files.getlist('images')
+    # ... check if files exist ...
+
     submitted_futures = []; original_filenames = []; job_id = str(uuid.uuid4())
     processed_count = 0
+    submission_start_time = time.time() # Time just before loop
 
-    if not files or files[0].filename == '': flash('No selected files.', 'warning'); return redirect(url_for('index'))
+    timing_log.info(f"[Job {job_id}] Received upload request.")
 
     for file in files:
         if file and allowed_file(file.filename):
             try:
                 filename = secure_filename(file.filename)
+                file_read_start = time.time()
                 image_bytes = file.read()
+                file_read_end = time.time()
                 if not image_bytes: flash(f'Skipping empty file: {filename}', 'warning'); continue
-                print(f"Submitting task for {filename}...")
+
+                submit_start = time.time()
                 future = client.submit(process_image_bytes, image_bytes, pure=False)
+                submit_end = time.time()
                 submitted_futures.append(future)
                 original_filenames.append(filename)
                 processed_count += 1
-            except Exception as e: flash(f'Error processing file {file.filename}: {e}', 'error'); print(f"Error submitting task for {file.filename}: {e}"); traceback.print_exc()
-        elif file and file.filename != '': flash(f'File type not allowed: {file.filename}', 'warning')
+                timing_log.info(f"[Job {job_id}] File '{filename}': Read took {(file_read_end-file_read_start)*1000:.2f}ms, Submit took {(submit_end-submit_start)*1000:.2f}ms")
 
-    if not submitted_futures: flash('No valid image files were processed.', 'error'); return redirect(url_for('index'))
+            except Exception as e: # ... error handling ...
+        # ... other file checks ...
 
+    submission_end_time = time.time() # Time after loop
+
+    if not submitted_futures: # ... error handling ...
+
+    # Store job information WITH timestamps
     jobs[job_id] = {
         'status': 'processing',
         'filenames': original_filenames,
         'futures': submitted_futures,
         'results': [None] * len(submitted_futures),
-        'total_tasks': len(submitted_futures), # Store total count
-        'completed_tasks': 0 # Initialize completed count
+        'task_times': [None] * len(submitted_futures), # Store worker times
+        'total_tasks': len(submitted_futures),
+        'completed_tasks': 0,
+        'timestamps': { # Store timestamps for this job
+             'request_received': request_received_time,
+             'submission_start': submission_start_time,
+             'submission_end': submission_end_time,
+             'last_results_check': None, # Track last check time
+             'first_result_received': None, # Track when first result arrives
+             'all_results_received': None # Track when last result arrives
+             }
     }
+    timing_log.info(f"[Job {job_id}] Submitted {processed_count} tasks. Total submission time: {(submission_end_time-submission_start_time)*1000:.2f}ms")
 
-    flash(f'Successfully submitted {processed_count} image(s) for captioning. Job ID: {job_id}', 'success')
+    flash(f'Successfully submitted {processed_count} image(s). Job ID: {job_id}', 'success')
     return redirect(url_for('show_results', job_id=job_id))
+
 
 @app.route('/results/<job_id>', methods=['GET'])
 def show_results(job_id):
-    """Display status and results for a given job ID."""
+    """Display status, results, and log timing for result checks."""
+    results_check_start_time = time.time()
     job_info = jobs.get(job_id)
     if not job_info: flash(f'Job ID {job_id} not found.', 'error'); return redirect(url_for('index'))
 
+    timing_log.info(f"[Job {job_id}] Request for results page.")
+    job_info['timestamps']['last_results_check'] = results_check_start_time
+
     progress = 0
-    num_done = 0 # Count tasks with stored results/errors
-    all_accounted_for = True # Assume all are done until we find one not
+    num_done = 0
+    all_accounted_for = True
 
-    # Check status of futures if job is still processing or has futures listed
-    if job_info.get('futures'): # Check if futures list exists
+    if job_info.get('futures'):
         futures_to_check = job_info['futures']
+        # Use wait(..., timeout=0) for a quick non-blocking check first
+        done_set, _ = wait(futures_to_check, timeout=0)
+
         for i, future in enumerate(futures_to_check):
-            # --- IMPROVED LOGIC ---
-            # Skip if we already have a result for this index
-            if job_info['results'][i] is not None:
+            if job_info['results'][i] is not None: # Already processed
                 num_done += 1
-                continue # Already processed this one
+                continue
 
-            # Check status without long wait
-            if future.done(): # Check if Dask reports it as done (finished or error)
+            # Only try to get result if wait indicated it's done
+            if future in done_set:
+                result_fetch_start = time.time()
                 try:
-                    if future.status == 'finished':
-                       job_info['results'][i] = future.result(timeout=1) # Slightly longer timeout for retrieval
-                       num_done += 1
-                    elif future.status == 'error':
-                        try:
-                            job_info['results'][i] = f"ERROR: Task failed - {future.exception(timeout=1)}" # Get exception
-                        except Exception as e_inner:
-                            job_info['results'][i] = f"ERROR: Failed to get task exception - {e_inner}"
-                        num_done += 1 # Count errors as 'done' for progress
-                    else:
-                        # Should not happen if future.done() is true, but handle defensively
-                        all_accounted_for = False
-                except TimeoutError:
-                    # Getting result timed out even though it was done, try again next time
-                    log.warning(f"Timeout getting result/exception for done future {future.key}, job {job_id}")
-                    all_accounted_for = False
-                except Exception as e:
-                     # Failed to get result/exception for other reason
-                    log.error(f"Error getting result/exception for done future {future.key}, job {job_id}: {e}")
-                    job_info['results'][i] = f"ERROR: Failed to retrieve result/exception - {e}"
-                    num_done += 1 # Count as done
-            else:
-                # Future is still pending or running
-                all_accounted_for = False
-            # --- END IMPROVED LOGIC ---
+                    # Get tuple result: (caption_or_error, duration_on_worker)
+                    task_result_tuple = future.result(timeout=0.1) # Short timeout
+                    job_info['results'][i] = task_result_tuple[0] # Store caption/error
+                    job_info['task_times'][i] = task_result_tuple[1] # Store worker duration
+                    num_done += 1
+                    if job_info['timestamps']['first_result_received'] is None:
+                        job_info['timestamps']['first_result_received'] = time.time()
+                    timing_log.info(f"[Job {job_id}] Received result for task {i} (Worker time: {task_result_tuple[1]:.3f}s). Fetch took {(time.time()-result_fetch_start)*1000:.2f}ms.")
 
-        # Update overall job status if all futures are accounted for
-        if all_accounted_for:
+                except TimeoutError:
+                    timing_log.debug(f"[Job {job_id}] Timeout getting result for done future {future.key}")
+                    all_accounted_for = False # Not really done if we can't get result
+                except Exception as e:
+                    job_info['results'][i] = f"ERROR: Failed retrieval - {e}"
+                    job_info['task_times'][i] = -1 # Indicate error
+                    num_done += 1 # Count as 'done' for progress
+                    if job_info['timestamps']['first_result_received'] is None:
+                        job_info['timestamps']['first_result_received'] = time.time()
+                    timing_log.error(f"[Job {job_id}] Error getting result for task {i}: {e}. Fetch took {(time.time()-result_fetch_start)*1000:.2f}ms.")
+            else:
+                # Future not in done_set, still pending/running
+                all_accounted_for = False
+
+        # Update overall job status
+        if all_accounted_for and num_done == job_info['total_tasks']:
             job_info['status'] = 'complete'
-            # Optional: Delete futures list now we have all results
-            # del job_info['futures']
-        else:
-             # Keep status as processing if any future isn't finished/processed
+            job_info['timestamps']['all_results_received'] = time.time()
+            timing_log.info(f"[Job {job_id}] All {num_done} results received. Status set to complete.")
+            if 'futures' in job_info: del job_info['futures'] # Cleanup
+        elif job_info['status'] != 'error': # Don't override error status
              job_info['status'] = 'processing'
 
 
-    # Recalculate progress based on num_done (tasks with results/errors stored)
+    # Recalculate progress
     job_info['completed_tasks'] = num_done
-    if job_info['total_tasks'] > 0:
-        progress = int((num_done / job_info['total_tasks']) * 100)
-
-    # If overall status is now complete, ensure progress is 100
-    if job_info['status'] == 'complete':
-         progress = 100
-
+    if job_info['total_tasks'] > 0: progress = int((num_done / job_info['total_tasks']) * 100)
+    if job_info['status'] == 'complete': progress = 100
 
     results_display = list(zip(job_info['filenames'], job_info['results']))
+    results_check_end_time = time.time()
+    timing_log.info(f"[Job {job_id}] Results page loaded. Check took {(results_check_end_time - results_check_start_time)*1000:.2f}ms. Progress: {progress}%.")
 
-    return render_template('results.html',
-                           job_id=job_id,
-                           status=job_info['status'],
-                           results=results_display,
-                           progress=progress)
+    return render_template('results.html', job_id=job_id, status=job_info['status'], results=results_display, progress=progress)
+
 
 # --- Run the App ---
 if __name__ == '__main__':
     if client is None: print("Cannot start Flask app without Dask connection.", file=sys.stderr); sys.exit(1)
-    print("Starting Flask app on http://0.0.0.0:5000"); app.run(host='0.0.0.0', port=5000, debug=False)
+    print(f"Starting Flask app on http://0.0.0.0:5000, logging timings to {HOST_LOG_FILE}")
+    app.run(host='0.0.0.0', port=5000, debug=False) # IMPORTANT: debug=False for stability
