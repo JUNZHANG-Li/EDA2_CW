@@ -11,17 +11,11 @@ Group={{ target_user }}
 # Set the working directory to where app.py is located
 WorkingDirectory={{ webapp_base_dir }}
 
-# Command to execute the Flask app using Gunicorn
-# Gunicorn is installed system-wide, so it should be in the default PATH.
-# Options:
-# --workers: number of worker processes (start with 1 or 2, adjust based on load)
-# --bind: the host and port Gunicorn should listen on
-# --timeout: worker timeout (increase if tasks take long, BLIP can be slow)
-# NOTE: Gunicorn does NOT have a --limit-request-body option like Werkzeug's MAX_CONTENT_LENGTH.
-# Flask's MAX_CONTENT_LENGTH check will happen within the app as the body is read by Werkzeug.
-# If a 413 error still occurs, it is likely enforced by a reverse proxy (Nginx/Apache) in front of Gunicorn.
-# app:app: Tells Gunicorn to find the Flask application instance 'app' in 'app.py'
-ExecStart=gunicorn --workers 2 --bind 0.0.0.0:5000 --timeout 120 app:app
+# Command to execute the Flask app
+# Use the full path to python3 if needed, or ensure it's in the user's PATH
+# Add --host=0.0.0.0 and --port=5000 if not handled in app.py directly
+# Redirect stdout/stderr to journald for easy logging with journalctl
+ExecStart=/usr/bin/python3 {{ webapp_base_dir }}/app.py
 
 # Restart the service if it fails
 Restart=always

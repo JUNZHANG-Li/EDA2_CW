@@ -1,6 +1,6 @@
 - name: Deploy Flask Web Application for Image Captioning
-  hosts: hostnode # Target only the host node
-  become: true    # Needed for package installation and creating dirs in /opt
+  hosts: hostnode
+  become: true
 
   vars:
     webapp_base_dir: "/opt/comp0239_coursework/webapp"
